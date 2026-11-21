@@ -1,0 +1,5 @@
+<!-- Hex Swatch icon (40x40, shown in Settings → Plugins and the Marketplace): a circle (hex colours) and a diamond (Tailwind). -->
+<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40">
+  <circle cx="14" cy="15" r="11" fill="#e7000b" stroke="#82181a" stroke-width="1.5"/>
+  <path d="M26 13 L38 25 L26 37 L14 25 Z" fill="#00a6f4" stroke="#024a70" stroke-width="1.5" stroke-linejoin="round"/>
+</svg>

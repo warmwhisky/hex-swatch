@@ -1,0 +1,50 @@
+<!-- Hex Swatch: tells PhpStorm to call HexSwatchListener whenever an editor opens.
+     <description> and <change-notes> are what Settings → Plugins shows. Add a <h3> block to change-notes on every new version. -->
+<idea-plugin>
+    <id>org.gtdb.hexswatch</id>
+    <name>Hex Swatch</name>
+    <vendor url="https://gtdb.org">GTDB</vendor>
+
+    <description><![CDATA[
+<p>Shows a small colour mark before every colour in any file: CSS, Blade, HTML, JS, PHP, Vue, Markdown. Click the mark to change the colour.</p>
+<ul>
+  <li><b>Hex colours</b> (<code>#abc</code>, <code>#aabbcc</code>, <code>#aabbccaa</code>) get a <b>circle</b>.
+      Click it for PhpStorm's colour picker, with opacity. The hex in the code updates as you drag.
+      This also works inside Tailwind classes like <code>hover:bg-[#a10000]/50</code>.</li>
+  <li><b>Tailwind colour classes</b> (<code>border-red-600</code>, <code>hover:text-sky-300/50</code>) get a <b>diamond</b>.
+      Click it for a row of that colour's shades, 50 to 950. Pick one and only the shade number changes.</li>
+</ul>
+<p>Notes:</p>
+<ul>
+  <li>Marks show next to PhpStorm's own gutter swatches; the plugin changes no IDE settings.</li>
+  <li>The text is scanned 300 ms after you stop typing. Files over 2 MB are skipped.</li>
+  <li>Tailwind colours follow the project's Tailwind version: 3 if Tailwind 3 is installed or listed in
+      <code>package.json</code>, otherwise 4. Custom theme colours are not read.</li>
+  <li>Words made only of a–f (like <code>#add</code>) can look like colours and get a circle.</li>
+</ul>
+]]></description>
+
+    <change-notes><![CDATA[
+<h3>1.2.0</h3>
+<ul>
+  <li>Tailwind 4 colours, including the new mauve, olive, mist and taupe. Each project uses the colours of its own Tailwind version (3 or 4).</li>
+  <li>Works in all JetBrains IDEs from 2023.3 on.</li>
+  <li>Plugin icon.</li>
+</ul>
+<h3>1.1.0</h3>
+<ul>
+  <li>New: Tailwind colour classes (<code>bg-</code>, <code>text-</code>, <code>border-</code>, <code>ring-</code>, <code>fill-</code> and others) get a diamond; click it to pick a shade from 50 to 950.</li>
+  <li>Opacity suffixes like <code>/50</code> show as see-through.</li>
+  <li>Hex colours now get a circle instead of a square, so they look different from PhpStorm's own swatches.</li>
+</ul>
+<h3>1.0.0</h3>
+<ul>
+  <li>First version: a square before every hex colour in any file; click it for a colour picker.</li>
+</ul>
+]]></change-notes>
+
+    <depends>com.intellij.modules.platform</depends>
+    <extensions defaultExtensionNs="com.intellij">
+        <editorFactoryListener implementation="hexswatch.HexSwatchListener"/>
+    </extensions>
+</idea-plugin>

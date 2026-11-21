@@ -1,0 +1,480 @@
+// Hex Swatch: a small colour mark before every colour in any file; click it to change the colour.
+//   - Hex colours (#abc, #aabbcc, #aabbccaa)            -> circle  -> PhpStorm's colour picker
+//   - Tailwind colour classes (hover:bg-red-600, /50)  -> diamond -> a row of that colour's shades (50-950)
+//     Colours follow the project's Tailwind version: 3 or 4 (tableFor()).
+//
+// Loaded by: META-INF/plugin.xml (<editorFactoryListener>). PhpStorm calls editorCreated() for every editor it opens.
+// Calls:     PhpStorm's inlay API (the marks), ColorChooserService (hex picker), JBPopupFactory (shade row).
+//
+// How it works:
+//   1. editorCreated()   - for each code editor, listen for typing and mouse clicks, then scan once.
+//   2. scheduleScan()    - after typing stops for 300 ms, scan() runs once (not on every key).
+//   3. scan()            - one regex pass per kind over the file text; adds marks for new colours, removes stale ones.
+//   4. onClick()         - a click on a mark opens the hex picker or the shade row; a choice rewrites the text.
+
+package hexswatch;
+
+import com.intellij.openapi.Disposable;
+import com.intellij.openapi.command.WriteCommandAction;
+import com.intellij.openapi.editor.Document;
+import com.intellij.openapi.editor.Editor;
+import com.intellij.openapi.editor.EditorCustomElementRenderer;
+import com.intellij.openapi.editor.EditorKind;
+import com.intellij.openapi.editor.Inlay;
+import com.intellij.openapi.editor.event.DocumentEvent;
+import com.intellij.openapi.editor.event.DocumentListener;
+import com.intellij.openapi.editor.event.EditorFactoryEvent;
+import com.intellij.openapi.editor.event.EditorFactoryListener;
+import com.intellij.openapi.editor.event.EditorMouseEvent;
+import com.intellij.openapi.editor.event.EditorMouseListener;
+import com.intellij.openapi.editor.markup.TextAttributes;
+import com.intellij.openapi.project.Project;
+import com.intellij.openapi.ui.popup.JBPopup;
+import com.intellij.openapi.ui.popup.JBPopupFactory;
+import com.intellij.openapi.util.Disposer;
+import com.intellij.openapi.util.Key;
+import com.intellij.ui.ColorChooserService;
+import com.intellij.ui.JBColor;
+import com.intellij.ui.awt.RelativePoint;
+import com.intellij.ui.scale.JBUIScale;
+import com.intellij.util.Alarm;
+import com.intellij.util.ui.JBUI;
+import org.jetbrains.annotations.NotNull;
+
+import javax.swing.*;
+import java.awt.*;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
+import java.awt.geom.Ellipse2D;
+import java.awt.geom.Path2D;
+import java.awt.geom.Rectangle2D;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+public class HexSwatchListener implements EditorFactoryListener {
+
+    // #abc, #abcd, #aabbcc, #aabbccdd. Not after a letter/digit/&/# (skips "&#039;", "abc#def"),
+    // and not followed by a letter/digit/_/- (skips "#abcdefg", "#add-button").
+    private static final Pattern HEX = Pattern.compile(
+            "(?<![\\w&#])#([0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{3,4})(?![\\w-])");
+
+    // Tailwind's 11 shades and two colour tables; each project uses the one matching its Tailwind (see tableFor()).
+    //   V3: 22 colours copied from tailwindcss 3.4 (colors.js).
+    //   V4: 26 colours from tailwindcss 4.3 (theme.css), OKLCH converted to hex. Adds mauve, olive, mist, taupe.
+    private static final String[] SHADES = {"50", "100", "200", "300", "400", "500", "600", "700", "800", "900", "950"};
+    private static final Map<String, String[]> V3 = new LinkedHashMap<>();
+    private static final Map<String, String[]> V4 = new LinkedHashMap<>();
+    static {
+        put(V3, "slate", "#f8fafc #f1f5f9 #e2e8f0 #cbd5e1 #94a3b8 #64748b #475569 #334155 #1e293b #0f172a #020617");
+        put(V3, "gray", "#f9fafb #f3f4f6 #e5e7eb #d1d5db #9ca3af #6b7280 #4b5563 #374151 #1f2937 #111827 #030712");
+        put(V3, "zinc", "#fafafa #f4f4f5 #e4e4e7 #d4d4d8 #a1a1aa #71717a #52525b #3f3f46 #27272a #18181b #09090b");
+        put(V3, "neutral", "#fafafa #f5f5f5 #e5e5e5 #d4d4d4 #a3a3a3 #737373 #525252 #404040 #262626 #171717 #0a0a0a");
+        put(V3, "stone", "#fafaf9 #f5f5f4 #e7e5e4 #d6d3d1 #a8a29e #78716c #57534e #44403c #292524 #1c1917 #0c0a09");
+        put(V3, "red", "#fef2f2 #fee2e2 #fecaca #fca5a5 #f87171 #ef4444 #dc2626 #b91c1c #991b1b #7f1d1d #450a0a");
+        put(V3, "orange", "#fff7ed #ffedd5 #fed7aa #fdba74 #fb923c #f97316 #ea580c #c2410c #9a3412 #7c2d12 #431407");
+        put(V3, "amber", "#fffbeb #fef3c7 #fde68a #fcd34d #fbbf24 #f59e0b #d97706 #b45309 #92400e #78350f #451a03");
+        put(V3, "yellow", "#fefce8 #fef9c3 #fef08a #fde047 #facc15 #eab308 #ca8a04 #a16207 #854d0e #713f12 #422006");
+        put(V3, "lime", "#f7fee7 #ecfccb #d9f99d #bef264 #a3e635 #84cc16 #65a30d #4d7c0f #3f6212 #365314 #1a2e05");
+        put(V3, "green", "#f0fdf4 #dcfce7 #bbf7d0 #86efac #4ade80 #22c55e #16a34a #15803d #166534 #14532d #052e16");
+        put(V3, "emerald", "#ecfdf5 #d1fae5 #a7f3d0 #6ee7b7 #34d399 #10b981 #059669 #047857 #065f46 #064e3b #022c22");
+        put(V3, "teal", "#f0fdfa #ccfbf1 #99f6e4 #5eead4 #2dd4bf #14b8a6 #0d9488 #0f766e #115e59 #134e4a #042f2e");
+        put(V3, "cyan", "#ecfeff #cffafe #a5f3fc #67e8f9 #22d3ee #06b6d4 #0891b2 #0e7490 #155e75 #164e63 #083344");
+        put(V3, "sky", "#f0f9ff #e0f2fe #bae6fd #7dd3fc #38bdf8 #0ea5e9 #0284c7 #0369a1 #075985 #0c4a6e #082f49");
+        put(V3, "blue", "#eff6ff #dbeafe #bfdbfe #93c5fd #60a5fa #3b82f6 #2563eb #1d4ed8 #1e40af #1e3a8a #172554");
+        put(V3, "indigo", "#eef2ff #e0e7ff #c7d2fe #a5b4fc #818cf8 #6366f1 #4f46e5 #4338ca #3730a3 #312e81 #1e1b4b");
+        put(V3, "violet", "#f5f3ff #ede9fe #ddd6fe #c4b5fd #a78bfa #8b5cf6 #7c3aed #6d28d9 #5b21b6 #4c1d95 #2e1065");
+        put(V3, "purple", "#faf5ff #f3e8ff #e9d5ff #d8b4fe #c084fc #a855f7 #9333ea #7e22ce #6b21a8 #581c87 #3b0764");
+        put(V3, "fuchsia", "#fdf4ff #fae8ff #f5d0fe #f0abfc #e879f9 #d946ef #c026d3 #a21caf #86198f #701a75 #4a044e");
+        put(V3, "pink", "#fdf2f8 #fce7f3 #fbcfe8 #f9a8d4 #f472b6 #ec4899 #db2777 #be185d #9d174d #831843 #500724");
+        put(V3, "rose", "#fff1f2 #ffe4e6 #fecdd3 #fda4af #fb7185 #f43f5e #e11d48 #be123c #9f1239 #881337 #4c0519");
+        put(V4, "slate", "#f8fafc #f1f5f9 #e2e8f0 #cad5e2 #90a1b9 #62748e #45556c #314158 #1d293d #0f172b #020618");
+        put(V4, "gray", "#f9fafb #f3f4f6 #e5e7eb #d1d5dc #99a1af #6a7282 #4a5565 #364153 #1e2939 #101828 #030712");
+        put(V4, "zinc", "#fafafa #f4f4f5 #e4e4e7 #d4d4d8 #9f9fa9 #71717b #52525c #3f3f46 #27272a #18181b #09090b");
+        put(V4, "neutral", "#fafafa #f5f5f5 #e5e5e5 #d4d4d4 #a1a1a1 #737373 #525252 #404040 #262626 #171717 #0a0a0a");
+        put(V4, "stone", "#fafaf9 #f5f5f4 #e7e5e4 #d6d3d1 #a6a09b #79716b #57534d #44403b #292524 #1c1917 #0c0a09");
+        put(V4, "mauve", "#fafafa #f3f1f3 #e7e4e7 #d7d0d7 #a89ea9 #79697b #594c5b #463947 #2a212c #1d161e #0c090c");
+        put(V4, "olive", "#fbfbf9 #f4f4f0 #e8e8e3 #d8d8d0 #abab9c #7c7c67 #5b5b4b #474739 #2b2b22 #1d1d16 #0c0c09");
+        put(V4, "mist", "#f9fbfb #f1f3f3 #e3e7e8 #d0d6d8 #9ca8ab #67787c #4b585b #394447 #22292b #161b1d #090b0c");
+        put(V4, "taupe", "#fbfaf9 #f3f1f1 #e8e4e3 #d8d2d0 #aba09c #7c6d67 #5b4f4b #473c39 #2b2422 #1d1816 #0c0a09");
+        put(V4, "red", "#fef2f2 #ffe2e2 #ffc9c9 #ffa2a2 #ff6467 #fb2c36 #e7000b #c10007 #9f0712 #82181a #460809");
+        put(V4, "orange", "#fff7ed #ffedd4 #ffd6a7 #ffb86a #ff8904 #ff6900 #f54900 #ca3500 #9f2d00 #7e2a0c #441306");
+        put(V4, "amber", "#fffbeb #fef3c6 #fee685 #ffd230 #ffb900 #fe9a00 #e17100 #bb4d00 #973c00 #7b3306 #461901");
+        put(V4, "yellow", "#fefce8 #fef9c2 #fff085 #ffdf20 #fdc700 #f0b100 #d08700 #a65f00 #894b00 #733e0a #432004");
+        put(V4, "lime", "#f7fee7 #ecfcca #d8f999 #bbf451 #9ae600 #7ccf00 #5ea500 #497d00 #3c6300 #35530e #192e03");
+        put(V4, "green", "#f0fdf4 #dcfce7 #b9f8cf #7bf1a8 #05df72 #00c950 #00a63e #008236 #016630 #0d542b #032e15");
+        put(V4, "emerald", "#ecfdf5 #d0fae5 #a4f4cf #5ee9b5 #00d492 #00bc7d #009966 #007a55 #006045 #004f3b #002c22");
+        put(V4, "teal", "#f0fdfa #cbfbf1 #96f7e4 #46ecd5 #00d5be #00bba7 #009689 #00786f #005f5a #0b4f4a #022f2e");
+        put(V4, "cyan", "#ecfeff #cefafe #a2f4fd #53eafd #00d3f2 #00b8db #0092b8 #007595 #005f78 #104e64 #053345");
+        put(V4, "sky", "#f0f9ff #dff2fe #b8e6fe #74d4ff #00bcff #00a6f4 #0084d1 #0069a8 #00598a #024a70 #052f4a");
+        put(V4, "blue", "#eff6ff #dbeafe #bedbff #8ec5ff #51a2ff #2b7fff #155dfc #1447e6 #193cb8 #1c398e #162456");
+        put(V4, "indigo", "#eef2ff #e0e7ff #c6d2ff #a3b3ff #7c86ff #615fff #4f39f6 #432dd7 #372aac #312c85 #1e1a4d");
+        put(V4, "violet", "#f5f3ff #ede9fe #ddd6ff #c4b4ff #a684ff #8e51ff #7f22fe #7008e7 #5d0ec0 #4d179a #2f0d68");
+        put(V4, "purple", "#faf5ff #f3e8ff #e9d4ff #dab2ff #c27aff #ad46ff #9810fa #8200db #6e11b0 #59168b #3c0366");
+        put(V4, "fuchsia", "#fdf4ff #fae8ff #f6cfff #f4a8ff #ed6aff #e12afb #c800de #a800b7 #8a0194 #721378 #4b004f");
+        put(V4, "pink", "#fdf2f8 #fce7f3 #fccee8 #fda5d5 #fb64b6 #f6339a #e60076 #c6005c #a3004c #861043 #510424");
+        put(V4, "rose", "#fff1f2 #ffe4e6 #ffccd3 #ffa1ad #ff637e #ff2056 #ec003f #c70036 #a50036 #8b0836 #4d0218");
+    }
+
+    private static void put(Map<String, String[]> table, String name, String hexes) {
+        table.put(name, hexes.split(" "));
+    }
+
+    // A Tailwind colour class: <prefix>-<colour>-<shade>, optional /<opacity>. Variants (hover:, dark:, md:) sit
+    // before it after a ":", which the lookbehind allows. Groups: 1 colour, 2 shade, 3 opacity (may be null).
+    private static final Pattern TW = Pattern.compile(
+            "(?<![\\w-])(?:bg|text|border(?:-[xytrblse])?|divide|outline|ring(?:-offset)?|shadow|decoration"
+                    + "|accent|caret|fill|stroke|placeholder|from|via|to)-("
+                    + String.join("|", V4.keySet()) + ")-(" // V4 has every V3 name plus four more
+                    + String.join("|", SHADES) + ")(?:/(\\d{1,3}))?(?![\\w-])");
+
+    private static final int MAX_FILE_CHARS = 2_000_000; // skip huge files (minified bundles, dumps)
+    private static final int SCAN_DELAY_MS = 300;
+
+    // Per-editor cleanup handle, so everything we add is removed when the editor closes.
+    private static final Key<Disposable> DISPOSABLE = Key.create("hexswatch.disposable");
+
+    // Per-project memo of which Tailwind table it uses, read once (restart the IDE after upgrading Tailwind).
+    private static final Key<Map<String, String[]>> TABLE = Key.create("hexswatch.tailwindTable");
+
+    // ---- 1. Editor opened / closed -------------------------------------------------------------
+
+    @Override
+    public void editorCreated(@NotNull EditorFactoryEvent event) {
+        Editor editor = event.getEditor();
+        if (editor.getEditorKind() != EditorKind.MAIN_EDITOR || editor.getProject() == null) {
+            return; // only code editors, not consoles, search boxes, commit messages...
+        }
+
+        Disposable disposable = Disposer.newDisposable("hexswatch");
+        editor.putUserData(DISPOSABLE, disposable);
+        Alarm alarm = new Alarm(Alarm.ThreadToUse.SWING_THREAD, disposable);
+
+        editor.getDocument().addDocumentListener(new DocumentListener() {
+            @Override
+            public void documentChanged(@NotNull DocumentEvent e) {
+                scheduleScan(editor, alarm);
+            }
+        }, disposable);
+
+        editor.addEditorMouseListener(new EditorMouseListener() {
+            @Override
+            public void mouseClicked(@NotNull EditorMouseEvent e) {
+                onClick(editor, e);
+            }
+        }, disposable);
+
+        scheduleScan(editor, alarm);
+    }
+
+    @Override
+    public void editorReleased(@NotNull EditorFactoryEvent event) {
+        Disposable disposable = event.getEditor().getUserData(DISPOSABLE);
+        if (disposable != null) {
+            Disposer.dispose(disposable); // stops the timer and both listeners
+        }
+    }
+
+    // ---- 2. Wait for a pause in typing ---------------------------------------------------------
+
+    private static void scheduleScan(Editor editor, Alarm alarm) {
+        alarm.cancelAllRequests();
+        alarm.addRequest(() -> {
+            if (!editor.isDisposed()) scan(editor);
+        }, SCAN_DELAY_MS);
+    }
+
+    // ---- 3. Find colours and sync the marks ----------------------------------------------------
+
+    private static void scan(Editor editor) {
+        CharSequence text = editor.getDocument().getImmutableCharSequence();
+
+        // What should be there: offset where the mark goes -> mark.
+        Map<Integer, Swatch> wanted = new HashMap<>();
+        if (text.length() <= MAX_FILE_CHARS) {
+            Matcher hex = HEX.matcher(text);
+            while (hex.find()) {
+                wanted.put(hex.start(), new Swatch(parseHex(hex.group(1)), false));
+            }
+            Matcher tw = TW.matcher(text);
+            while (tw.find()) {
+                Color c = tailwindColor(editor.getProject(), tw.group(1), tw.group(2), tw.group(3));
+                wanted.put(tw.start(), new Swatch(c, true));
+            }
+        }
+
+        // Keep marks that are still right, remove the rest.
+        List<Inlay<? extends Swatch>> existing =
+                editor.getInlayModel().getInlineElementsInRange(0, text.length(), Swatch.class);
+        for (Inlay<? extends Swatch> inlay : existing) {
+            Swatch want = wanted.get(inlay.getOffset());
+            if (want != null && want.sameAs(inlay.getRenderer())) {
+                wanted.remove(inlay.getOffset()); // already correct
+            } else {
+                Disposer.dispose(inlay);
+            }
+        }
+
+        // Add the new ones.
+        for (Map.Entry<Integer, Swatch> e : wanted.entrySet()) {
+            editor.getInlayModel().addInlineElement(e.getKey(), false, e.getValue());
+        }
+    }
+
+    // "a10000" -> Color. 3/4 digits are shorthand (#f00 = #ff0000); the 4th/8th digits are alpha, as in CSS.
+    private static Color parseHex(String hex) {
+        if (hex.length() <= 4) {
+            StringBuilder full = new StringBuilder();
+            for (char c : hex.toCharArray()) full.append(c).append(c);
+            hex = full.toString();
+        }
+        int r = Integer.parseInt(hex.substring(0, 2), 16);
+        int g = Integer.parseInt(hex.substring(2, 4), 16);
+        int b = Integer.parseInt(hex.substring(4, 6), 16);
+        int a = hex.length() == 8 ? Integer.parseInt(hex.substring(6, 8), 16) : 255;
+        return new Color(r, g, b, a);
+    }
+
+    // ("red", "600", "50") -> #dc2626 at 50% opacity. Opacity null = solid.
+    private static Color tailwindColor(Project project, String name, String shade, String opacity) {
+        Color c = parseHex(shadesFor(project, name)[shadeIndex(shade)].substring(1));
+        if (opacity == null) return c;
+        int a = Math.round(Math.min(100, Integer.parseInt(opacity)) * 2.55f);
+        return new Color(c.getRed(), c.getGreen(), c.getBlue(), a);
+    }
+
+    // The 11 hex values for a colour name in this project's Tailwind. Names only in V4 (mauve...) always use V4.
+    private static String[] shadesFor(Project project, String name) {
+        String[] hexes = tableFor(project).get(name);
+        return hexes != null ? hexes : V4.get(name);
+    }
+
+    // V3 if the project has Tailwind 3 installed (node_modules) or listed (package.json); otherwise V4, the current one.
+    private static Map<String, String[]> tableFor(Project project) {
+        Map<String, String[]> table = project.getUserData(TABLE);
+        if (table == null) {
+            table = V4;
+            String base = project.getBasePath();
+            if (base != null) {
+                String installed = readFile(Paths.get(base, "node_modules", "tailwindcss", "package.json"));
+                String listed = readFile(Paths.get(base, "package.json"));
+                Matcher v = Pattern.compile("\"version\"\\s*:\\s*\"(\\d+)").matcher(installed);
+                Matcher l = Pattern.compile("\"tailwindcss\"\\s*:\\s*\"\\D*(\\d+)").matcher(listed);
+                String major = v.find() ? v.group(1) : l.find() ? l.group(1) : "4";
+                if (major.equals("3")) table = V3;
+            }
+            project.putUserData(TABLE, table);
+        }
+        return table;
+    }
+
+    private static String readFile(Path path) {
+        try {
+            return Files.exists(path) ? Files.readString(path) : "";
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    private static int shadeIndex(String shade) {
+        for (int i = 0; i < SHADES.length; i++) if (SHADES[i].equals(shade)) return i;
+        return 0;
+    }
+
+    // ---- 4. Click a mark -----------------------------------------------------------------------
+
+    private static void onClick(Editor editor, EditorMouseEvent e) {
+        Inlay<?> inlay = e.getInlay();
+        if (inlay == null || !(inlay.getRenderer() instanceof Swatch swatch)) return;
+        e.consume(); // don't also move the caret
+
+        if (swatch.tailwind) {
+            showShades(editor, inlay.getOffset(), e.getMouseEvent());
+        } else {
+            showHexPicker(editor, inlay.getOffset(), swatch.color, e.getMouseEvent());
+        }
+    }
+
+    // ---- 4a. Hex: PhpStorm's picker, rewrites the hex as you drag ------------------------------
+
+    private static void showHexPicker(Editor editor, int start, Color current, MouseEvent click) {
+        Project project = editor.getProject();
+        boolean upper = isUpperCase(editor.getDocument(), start);
+
+        ColorChooserService.getInstance().showPopup(
+                project,
+                current,
+                (color, source) -> replaceHex(project, editor.getDocument(), start, color, upper),
+                new RelativePoint(click),
+                true,   // show the alpha (opacity) slider
+                false); // alpha as 0-255, not percent
+    }
+
+    // Swap the hex at `start` for the new colour. All changes from one popup undo as one step.
+    private static void replaceHex(Project project, Document doc, int start, Color color, boolean upper) {
+        Matcher m = HEX.matcher(doc.getImmutableCharSequence());
+        if (!m.find(start) || m.start() != start) return; // text moved or was edited meanwhile
+
+        String hex = color.getAlpha() == 255
+                ? String.format("#%02x%02x%02x", color.getRed(), color.getGreen(), color.getBlue())
+                : String.format("#%02x%02x%02x%02x", color.getRed(), color.getGreen(), color.getBlue(), color.getAlpha());
+        String newText = upper ? hex.toUpperCase() : hex;
+
+        WriteCommandAction.writeCommandAction(project)
+                .withName("Change Colour")
+                .withGroupId("hexswatch-" + start)
+                .run(() -> doc.replaceString(m.start(), m.end(), newText));
+    }
+
+    // Keep the file's style: if the existing hex has capitals (#A10000), write capitals back.
+    private static boolean isUpperCase(Document doc, int start) {
+        Matcher m = HEX.matcher(doc.getImmutableCharSequence());
+        if (!m.find(start) || m.start() != start) return false;
+        String digits = m.group(1);
+        return !digits.equals(digits.toLowerCase());
+    }
+
+    // ---- 4b. Tailwind: a row of the 11 shades; click one to swap the shade number ---------------
+
+    private static void showShades(Editor editor, int start, MouseEvent click) {
+        Matcher m = TW.matcher(editor.getDocument().getImmutableCharSequence());
+        if (!m.find(start) || m.start() != start) return;
+        String name = m.group(1);
+        String currentShade = m.group(2);
+        String[] hexes = shadesFor(editor.getProject(), name);
+
+        JPanel row = new JPanel(new GridLayout(1, SHADES.length, JBUI.scale(2), 0));
+        row.setBorder(JBUI.Borders.empty(6));
+        JBPopup[] popup = new JBPopup[1]; // filled in below; the cells need it to close the popup
+
+        for (int i = 0; i < SHADES.length; i++) {
+            String shade = SHADES[i];
+            ShadeCell cell = new ShadeCell(parseHex(hexes[i].substring(1)), shade, shade.equals(currentShade));
+            cell.setToolTipText(name + "-" + shade + "  " + hexes[i]);
+            cell.addMouseListener(new MouseAdapter() {
+                @Override
+                public void mouseClicked(MouseEvent ev) {
+                    replaceShade(editor, start, shade);
+                    popup[0].cancel();
+                }
+            });
+            row.add(cell);
+        }
+
+        popup[0] = JBPopupFactory.getInstance()
+                .createComponentPopupBuilder(row, null)
+                .setRequestFocus(true)
+                .setCancelOnClickOutside(true)
+                .createPopup();
+        popup[0].show(new RelativePoint(click));
+    }
+
+    // "hover:bg-red-600/50" -> "hover:bg-red-500/50": only the shade number changes.
+    private static void replaceShade(Editor editor, int start, String shade) {
+        Document doc = editor.getDocument();
+        Matcher m = TW.matcher(doc.getImmutableCharSequence());
+        if (!m.find(start) || m.start() != start) return; // text moved or was edited meanwhile
+
+        WriteCommandAction.writeCommandAction(editor.getProject())
+                .withName("Change Tailwind Shade")
+                .run(() -> doc.replaceString(m.start(2), m.end(2), shade));
+    }
+
+    // One shade in the popup: a colour box with its number underneath; the current one is outlined.
+    static class ShadeCell extends JComponent {
+        final Color color;
+        final String shade;
+        final boolean current;
+
+        ShadeCell(Color color, String shade, boolean current) {
+            this.color = color;
+            this.shade = shade;
+            this.current = current;
+            setPreferredSize(JBUI.size(30, 42));
+            setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        }
+
+        @Override
+        protected void paintComponent(Graphics g0) {
+            Graphics2D g = (Graphics2D) g0;
+            g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            int box = getWidth() - JBUI.scale(4);
+            int x = JBUI.scale(2);
+            g.setColor(color);
+            g.fillRoundRect(x, x, box, box, JBUI.scale(4), JBUI.scale(4));
+            g.setColor(current ? JBColor.foreground() : JBColor.GRAY);
+            g.setStroke(new BasicStroke(current ? JBUIScale.scale(2f) : 1f));
+            g.drawRoundRect(x, x, box, box, JBUI.scale(4), JBUI.scale(4));
+
+            g.setColor(JBColor.foreground());
+            g.setFont(JBUI.Fonts.miniFont());
+            FontMetrics fm = g.getFontMetrics();
+            g.drawString(shade, (getWidth() - fm.stringWidth(shade)) / 2, getHeight() - fm.getDescent());
+        }
+    }
+
+    // ---- The mark in the editor: circle for hex, diamond for Tailwind --------------------------
+
+    static class Swatch implements EditorCustomElementRenderer {
+        final Color color;
+        final boolean tailwind;
+
+        Swatch(Color color, boolean tailwind) {
+            this.color = color;
+            this.tailwind = tailwind;
+        }
+
+        boolean sameAs(Swatch other) {
+            return tailwind == other.tailwind && color.equals(other.color);
+        }
+
+        @Override
+        public int calcWidthInPixels(@NotNull Inlay inlay) {
+            return size(inlay) + 4; // mark plus a little gap before the text
+        }
+
+        @Override
+        public void paint(@NotNull Inlay inlay, @NotNull Graphics2D g, @NotNull Rectangle2D area,
+                          @NotNull TextAttributes attrs) {
+            int s = size(inlay);
+            double x = area.getX() + 1;
+            double y = area.getY() + (area.getHeight() - s) / 2;
+            Shape shape = tailwind ? diamond(x, y, s) : new Ellipse2D.Double(x, y, s, s);
+
+            g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            if (color.getAlpha() < 255) {          // see-through colour: white/grey halves show the opacity
+                Shape oldClip = g.getClip();
+                g.clip(shape);
+                g.setColor(Color.WHITE);
+                g.fill(shape);
+                g.setColor(Color.LIGHT_GRAY);
+                g.fill(new Rectangle2D.Double(x, y, s / 2.0, s));
+                g.setClip(oldClip);
+            }
+            g.setColor(color);
+            g.fill(shape);
+            g.setColor(Color.GRAY);
+            g.draw(shape);
+        }
+
+        private static Shape diamond(double x, double y, double s) {
+            Path2D p = new Path2D.Double();
+            p.moveTo(x + s / 2, y);
+            p.lineTo(x + s, y + s / 2);
+            p.lineTo(x + s / 2, y + s);
+            p.lineTo(x, y + s / 2);
+            p.closePath();
+            return p;
+        }
+
+        private static int size(Inlay inlay) {
+            return Math.max(8, (int) (inlay.getEditor().getLineHeight() * 0.65));
+        }
+    }
+}

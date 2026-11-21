@@ -1,0 +1,5 @@
+<!-- Dark-theme version of pluginIcon.svg: lighter outlines so the shapes stand out on a dark background. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40">
+  <circle cx="14" cy="15" r="11" fill="#fb2c36" stroke="#ffc9c9" stroke-width="1.5"/>
+  <path d="M26 13 L38 25 L26 37 L14 25 Z" fill="#00bcff" stroke="#b8e6fe" stroke-width="1.5" stroke-linejoin="round"/>
+</svg>
