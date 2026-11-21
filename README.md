@@ -15,6 +15,23 @@ before every colour in **any** file, including places the IDE's own swatches mis
 It reads the plain text, so it works in CSS, Blade, HTML, JS, PHP, Vue, Markdown and anything else. The scan runs
 300 ms after you stop typing; files over 2 MB are skipped. It changes no IDE settings.
 
+## Screenshots
+Every kind of mark in one file ([`docs/screenshots/demo.css`](docs/screenshots/demo.css)):
+
+![Every kind of colour mark](docs/screenshots/Screenshot-Demo.png)
+
+Click a circle for the colour picker, even inside a Tailwind class:
+
+![Colour picker on a hex inside a Tailwind class](docs/screenshots/Screenshot-Tailwind-Hex.png)
+
+Click a diamond for the row of shades:
+
+![Tailwind shade row](docs/screenshots/Screenshot-Tailwind-Shades.png)
+
+Or swap white and black:
+
+![Tailwind white/black swap](docs/screenshots/Screenshot-Tailwind-Black-White-Switch.png)
+
 ## Install
 - **Marketplace:** Settings → Plugins → Marketplace → search "Hex Swatch".
 - **From a zip:** Settings → Plugins → ⚙ → Install Plugin from Disk → `hex-swatch-<version>.zip`.

@@ -1,0 +1,73 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/* Hex Swatch: every kind of colour mark in one file. Click a mark to change the colour. */
+
+/* Hex colours: circle -> colour picker */
+.brand {
+    color: #a10000;
+    background: #fef2f2;
+    border-color: #1E40AF;          /* capitals stay capitals */
+    outline-color: #0ea5e980;       /* see-through: the circle shows it */
+}
+
+/* rgb() / rgba(): circle -> same picker, written back in the same style */
+.panel {
+    color: rgb(30, 64, 175);
+    background: rgba(0, 128, 255, 0.25);
+    border-color: rgb(161 0 0 / 50%);
+}
+
+/* Tailwind colour classes: diamond -> row of shades 50-950 */
+.button {
+    @apply bg-red-600 hover:bg-red-700 border-sky-300 ring-emerald-500/50;
+}
+
+/* Tailwind white / black: diamond -> swap between white and black */
+.badge {
+    @apply text-white dark:text-black bg-black/80;
+}
+
+/* Hex inside a Tailwind class: circle -> colour picker */
+.alert {
+    @apply bg-[#a10000] hover:bg-[#7f1d1d]/90 text-[rgb(255_237_213)];
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

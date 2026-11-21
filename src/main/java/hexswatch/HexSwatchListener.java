@@ -37,6 +37,7 @@ import com.intellij.openapi.util.Disposer;
 import com.intellij.openapi.util.Key;
 import com.intellij.ui.ColorChooserService;
 import com.intellij.ui.JBColor;
+import com.intellij.ui.ScreenUtil;
 import com.intellij.ui.awt.RelativePoint;
 import com.intellij.ui.scale.JBUIScale;
 import com.intellij.util.Alarm;
@@ -445,7 +446,7 @@ public class HexSwatchListener implements EditorFactoryListener {
             tips[i] = name + "-" + SHADES[i] + "  " + hexes[i];
         }
         // "hover:bg-red-600/50" -> "hover:bg-red-500/50": only the shade number (group 2) changes.
-        showRow(click, SHADES, colors, tips, m.group(2),
+        showRow(editor, start, click, SHADES, colors, tips, m.group(2),
                 shade -> replaceGroup(editor, start, TW, 2, shade, "Change Tailwind Shade"));
         return true;
     }
@@ -458,15 +459,16 @@ public class HexSwatchListener implements EditorFactoryListener {
 
         String[] words = {"white", "black"};
         // "text-white/80" -> "text-black/80": only the word (group 1) changes.
-        showRow(click, words, new Color[]{Color.WHITE, Color.BLACK}, new String[]{"white  #ffffff", "black  #000000"},
+        showRow(editor, start, click, words, new Color[]{Color.WHITE, Color.BLACK},
+                new String[]{"white  #ffffff", "black  #000000"},
                 m.group(1), word -> replaceGroup(editor, start, TW_BW, 1, word, "Change Tailwind Colour"));
     }
 
     // ---- Shared by 4b and 4c -------------------------------------------------------------------
 
     // A popup row of colour boxes with labels; the current one is outlined; a click calls onPick with its label.
-    private static void showRow(MouseEvent click, String[] labels, Color[] colors, String[] tips, String current,
-                                Consumer<String> onPick) {
+    private static void showRow(Editor editor, int start, MouseEvent click, String[] labels, Color[] colors,
+                                String[] tips, String current, Consumer<String> onPick) {
         JPanel row = new JPanel(new GridLayout(1, labels.length, JBUI.scale(2), 0));
         row.setBorder(JBUI.Borders.empty(6));
         JBPopup[] popup = new JBPopup[1]; // filled in below; the cells need it to close the popup
@@ -490,7 +492,21 @@ public class HexSwatchListener implements EditorFactoryListener {
                 .setRequestFocus(true)
                 .setCancelOnClickOutside(true)
                 .createPopup();
-        popup[0].show(new RelativePoint(click));
+        popup[0].show(rowLocation(editor, start, click, popup[0].getContent().getPreferredSize().height));
+    }
+
+    // Where the row goes: just under the clicked line if it fits on screen, otherwise just above it,
+    // so it never covers the colour being changed. x follows the mouse.
+    private static RelativePoint rowLocation(Editor editor, int start, MouseEvent click, int popupHeight) {
+        JComponent content = editor.getContentComponent();
+        int x = SwingUtilities.convertPoint(click.getComponent(), click.getPoint(), content).x;
+        int lineTop = editor.offsetToXY(start).y;
+        int lineBottom = lineTop + editor.getLineHeight();
+
+        RelativePoint below = new RelativePoint(content, new Point(x, lineBottom));
+        Rectangle screen = ScreenUtil.getScreenRectangle(below.getScreenPoint());
+        boolean fitsBelow = below.getScreenPoint().y + popupHeight <= screen.y + screen.height;
+        return fitsBelow ? below : new RelativePoint(content, new Point(x, lineTop - popupHeight));
     }
 
     // Re-find the colour at `start` and replace one regex group in it (0 = all of it).
