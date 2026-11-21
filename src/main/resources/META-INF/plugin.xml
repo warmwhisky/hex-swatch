@@ -11,8 +11,13 @@
   <li><b>Hex colours</b> (<code>#abc</code>, <code>#aabbcc</code>, <code>#aabbccaa</code>) get a <b>circle</b>.
       Click it for PhpStorm's colour picker, with opacity. The hex in the code updates as you drag.
       This also works inside Tailwind classes like <code>hover:bg-[#a10000]/50</code>.</li>
+  <li><b>rgb() and rgba()</b> (<code>rgb(255, 0, 0)</code>, <code>rgba(0,128,255,.5)</code>, <code>rgb(255 0 0 / 50%)</code>)
+      also get a <b>circle</b> and the same picker. The new colour is written in the same style: commas or spaces,
+      and a percentage opacity stays a percentage.</li>
   <li><b>Tailwind colour classes</b> (<code>border-red-600</code>, <code>hover:text-sky-300/50</code>) get a <b>diamond</b>.
       Click it for a row of that colour's shades, 50 to 950. Pick one and only the shade number changes.</li>
+  <li><b>Tailwind white and black</b> (<code>text-white</code>, <code>bg-black/50</code>) also get a <b>diamond</b>.
+      Click it to swap between white and black.</li>
 </ul>
 <p>Notes:</p>
 <ul>
@@ -25,6 +30,14 @@
 ]]></description>
 
     <change-notes><![CDATA[
+<h3>1.4.0</h3>
+<ul>
+  <li>New: <code>rgb()</code> and <code>rgba()</code> colours get a circle and the colour picker, in comma, space and <code>/ alpha</code> styles (and Tailwind's <code>rgb(255_0_0)</code>). The picked colour is written back in the same style.</li>
+</ul>
+<h3>1.3.0</h3>
+<ul>
+  <li>New: <code>text-white</code>, <code>bg-black</code> and the other white/black classes get a diamond; click it to swap between white and black. Variants and <code>/50</code> opacity are kept.</li>
+</ul>
 <h3>1.2.0</h3>
 <ul>
   <li>Tailwind 4 colours, including the new mauve, olive, mist and taupe. Each project uses the colours of its own Tailwind version (3 or 4).</li>

@@ -1,16 +1,18 @@
 // Hex Swatch: a small colour mark before every colour in any file; click it to change the colour.
 //   - Hex colours (#abc, #aabbcc, #aabbccaa)            -> circle  -> PhpStorm's colour picker
+//   - rgb()/rgba() (rgb(255, 0, 0), rgb(255 0 0 / 50%)) -> circle  -> same picker, written back in the same style
 //   - Tailwind colour classes (hover:bg-red-600, /50)  -> diamond -> a row of that colour's shades (50-950)
 //     Colours follow the project's Tailwind version: 3 or 4 (tableFor()).
+//   - Tailwind white/black (text-white, bg-black/50)   -> diamond -> white / black, to swap between them
 //
 // Loaded by: META-INF/plugin.xml (<editorFactoryListener>). PhpStorm calls editorCreated() for every editor it opens.
-// Calls:     PhpStorm's inlay API (the marks), ColorChooserService (hex picker), JBPopupFactory (shade row).
+// Calls:     PhpStorm's inlay API (the marks), ColorChooserService (colour picker), JBPopupFactory (shade row).
 //
 // How it works:
 //   1. editorCreated()   - for each code editor, listen for typing and mouse clicks, then scan once.
 //   2. scheduleScan()    - after typing stops for 300 ms, scan() runs once (not on every key).
 //   3. scan()            - one regex pass per kind over the file text; adds marks for new colours, removes stale ones.
-//   4. onClick()         - a click on a mark opens the hex picker or the shade row; a choice rewrites the text.
+//   4. onClick()         - a click on a mark opens the colour picker or the shade row; a choice rewrites the text.
 
 package hexswatch;
 
@@ -54,7 +56,10 @@ import java.nio.file.Paths;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -126,13 +131,22 @@ public class HexSwatchListener implements EditorFactoryListener {
         table.put(name, hexes.split(" "));
     }
 
-    // A Tailwind colour class: <prefix>-<colour>-<shade>, optional /<opacity>. Variants (hover:, dark:, md:) sit
-    // before it after a ":", which the lookbehind allows. Groups: 1 colour, 2 shade, 3 opacity (may be null).
-    private static final Pattern TW = Pattern.compile(
-            "(?<![\\w-])(?:bg|text|border(?:-[xytrblse])?|divide|outline|ring(?:-offset)?|shadow|decoration"
-                    + "|accent|caret|fill|stroke|placeholder|from|via|to)-("
-                    + String.join("|", V4.keySet()) + ")-(" // V4 has every V3 name plus four more
-                    + String.join("|", SHADES) + ")(?:/(\\d{1,3}))?(?![\\w-])");
+    // The start of every Tailwind colour utility. Variants (hover:, dark:, md:) sit before it after a ":",
+    // which the lookbehind allows.
+    private static final String PREFIX = "(?<![\\w-])(?:bg|text|border(?:-[xytrblse])?|divide|outline|ring(?:-offset)?"
+            + "|shadow|decoration|accent|caret|fill|stroke|placeholder|from|via|to)-";
+
+    // <prefix>-<colour>-<shade>, optional /<opacity>. Groups: 1 colour, 2 shade, 3 opacity (may be null).
+    private static final Pattern TW = Pattern.compile(PREFIX + "("
+            + String.join("|", V4.keySet()) + ")-(" // V4 has every V3 name plus four more
+            + String.join("|", SHADES) + ")(?:/(\\d{1,3}))?(?![\\w-])");
+
+    // <prefix>-white or <prefix>-black, optional /<opacity>. Groups: 1 white|black, 2 opacity (may be null).
+    private static final Pattern TW_BW = Pattern.compile(PREFIX + "(white|black)(?:/(\\d{1,3}))?(?![\\w-])");
+
+    // rgb(...) / rgba(...), any case. Groups: 1 the name, 2 what's inside the brackets, checked by parseRgb().
+    // [^()] skips anything with brackets inside, like rgb(var(--x)).
+    private static final Pattern RGB = Pattern.compile("(?i)(?<![\\w-])(rgba?)\\(([^()]*)\\)");
 
     private static final int MAX_FILE_CHARS = 2_000_000; // skip huge files (minified bundles, dumps)
     private static final int SCAN_DELAY_MS = 300;
@@ -202,6 +216,15 @@ public class HexSwatchListener implements EditorFactoryListener {
             while (hex.find()) {
                 wanted.put(hex.start(), new Swatch(parseHex(hex.group(1)), false));
             }
+            Matcher rgb = RGB.matcher(text);
+            while (rgb.find()) {
+                Color c = parseRgb(rgb.group(2));
+                if (c != null) wanted.put(rgb.start(), new Swatch(c, false));
+            }
+            Matcher bw = TW_BW.matcher(text);
+            while (bw.find()) {
+                wanted.put(bw.start(), new Swatch(withOpacity(blackOrWhite(bw.group(1)), bw.group(2)), true));
+            }
             Matcher tw = TW.matcher(text);
             while (tw.find()) {
                 Color c = tailwindColor(editor.getProject(), tw.group(1), tw.group(2), tw.group(3));
@@ -241,12 +264,46 @@ public class HexSwatchListener implements EditorFactoryListener {
         return new Color(r, g, b, a);
     }
 
+    // The inside of rgb(...): "255, 0, 0", "255 0 0 / 50%", "100% 0% 0%", "255,0,0,.5", Tailwind's "255_0_0".
+    // Returns null if it isn't 3 colour numbers plus an optional alpha (then no circle is drawn).
+    private static Color parseRgb(String inner) {
+        String[] parts = inner.trim().split("[\\s,/_]+");
+        if (parts.length != 3 && parts.length != 4) return null;
+        try {
+            int[] rgb = new int[3];
+            for (int i = 0; i < 3; i++) {
+                String p = parts[i];
+                float v = p.endsWith("%") ? Float.parseFloat(p.substring(0, p.length() - 1)) * 2.55f : Float.parseFloat(p);
+                if (v < 0 || v > 255.5f) return null;
+                rgb[i] = Math.round(v);
+            }
+            int a = 255;
+            if (parts.length == 4) {
+                String p = parts[3];
+                float v = p.endsWith("%") ? Float.parseFloat(p.substring(0, p.length() - 1)) / 100 : Float.parseFloat(p);
+                if (v < 0 || v > 1) return null;
+                a = Math.round(v * 255);
+            }
+            return new Color(rgb[0], rgb[1], rgb[2], a);
+        } catch (NumberFormatException e) {
+            return null; // "rgb(r, g, b)" in a comment, "rgba($color, 0.5)" in Sass...
+        }
+    }
+
     // ("red", "600", "50") -> #dc2626 at 50% opacity. Opacity null = solid.
     private static Color tailwindColor(Project project, String name, String shade, String opacity) {
-        Color c = parseHex(shadesFor(project, name)[shadeIndex(shade)].substring(1));
+        return withOpacity(parseHex(shadesFor(project, name)[shadeIndex(shade)].substring(1)), opacity);
+    }
+
+    // Tailwind's /50 suffix -> alpha. Null = solid.
+    private static Color withOpacity(Color c, String opacity) {
         if (opacity == null) return c;
         int a = Math.round(Math.min(100, Integer.parseInt(opacity)) * 2.55f);
         return new Color(c.getRed(), c.getGreen(), c.getBlue(), a);
+    }
+
+    private static Color blackOrWhite(String word) {
+        return word.equals("white") ? Color.WHITE : Color.BLACK; // same in Tailwind 3 and 4
     }
 
     // The 11 hex values for a colour name in this project's Tailwind. Names only in V4 (mauve...) always use V4.
@@ -294,73 +351,134 @@ public class HexSwatchListener implements EditorFactoryListener {
         if (inlay == null || !(inlay.getRenderer() instanceof Swatch swatch)) return;
         e.consume(); // don't also move the caret
 
+        int start = inlay.getOffset();
+        MouseEvent click = e.getMouseEvent();
+        CharSequence text = editor.getDocument().getImmutableCharSequence();
+
         if (swatch.tailwind) {
-            showShades(editor, inlay.getOffset(), e.getMouseEvent());
-        } else {
-            showHexPicker(editor, inlay.getOffset(), swatch.color, e.getMouseEvent());
+            if (!showShades(editor, start, click)) showBlackWhite(editor, start, click);
+            return;
+        }
+
+        // A circle: hex or rgb(). Work out how the colour is written now, so the new one is written the same way.
+        Matcher hex = HEX.matcher(text);
+        if (hex.find(start) && hex.start() == start) {
+            boolean upper = !hex.group(1).equals(hex.group(1).toLowerCase()); // #A10000 stays capitals
+            showPicker(editor, start, swatch.color, click, HEX, color -> formatHex(color, upper));
+            return;
+        }
+        Matcher rgb = RGB.matcher(text);
+        if (rgb.find(start) && rgb.start() == start) {
+            String name = rgb.group(1);
+            String inner = rgb.group(2);
+            showPicker(editor, start, swatch.color, click, RGB, color -> formatRgb(color, name, inner));
         }
     }
 
-    // ---- 4a. Hex: PhpStorm's picker, rewrites the hex as you drag ------------------------------
+    // ---- 4a. Hex / rgb(): PhpStorm's picker, rewrites the colour as you drag --------------------
 
-    private static void showHexPicker(Editor editor, int start, Color current, MouseEvent click) {
-        Project project = editor.getProject();
-        boolean upper = isUpperCase(editor.getDocument(), start);
-
+    private static void showPicker(Editor editor, int start, Color current, MouseEvent click, Pattern pattern,
+                                   Function<Color, String> format) {
         ColorChooserService.getInstance().showPopup(
-                project,
+                editor.getProject(),
                 current,
-                (color, source) -> replaceHex(project, editor.getDocument(), start, color, upper),
+                (color, source) -> replaceGroup(editor, start, pattern, 0, format.apply(color), "Change Colour"),
                 new RelativePoint(click),
                 true,   // show the alpha (opacity) slider
                 false); // alpha as 0-255, not percent
     }
 
-    // Swap the hex at `start` for the new colour. All changes from one popup undo as one step.
-    private static void replaceHex(Project project, Document doc, int start, Color color, boolean upper) {
-        Matcher m = HEX.matcher(doc.getImmutableCharSequence());
-        if (!m.find(start) || m.start() != start) return; // text moved or was edited meanwhile
-
-        String hex = color.getAlpha() == 255
-                ? String.format("#%02x%02x%02x", color.getRed(), color.getGreen(), color.getBlue())
-                : String.format("#%02x%02x%02x%02x", color.getRed(), color.getGreen(), color.getBlue(), color.getAlpha());
-        String newText = upper ? hex.toUpperCase() : hex;
-
-        WriteCommandAction.writeCommandAction(project)
-                .withName("Change Colour")
-                .withGroupId("hexswatch-" + start)
-                .run(() -> doc.replaceString(m.start(), m.end(), newText));
+    // Color -> "#a10000", or "#a1000080" when see-through.
+    private static String formatHex(Color c, boolean upper) {
+        String hex = c.getAlpha() == 255
+                ? String.format("#%02x%02x%02x", c.getRed(), c.getGreen(), c.getBlue())
+                : String.format("#%02x%02x%02x%02x", c.getRed(), c.getGreen(), c.getBlue(), c.getAlpha());
+        return upper ? hex.toUpperCase() : hex;
     }
 
-    // Keep the file's style: if the existing hex has capitals (#A10000), write capitals back.
-    private static boolean isUpperCase(Document doc, int start) {
-        Matcher m = HEX.matcher(doc.getImmutableCharSequence());
-        if (!m.find(start) || m.start() != start) return false;
-        String digits = m.group(1);
-        return !digits.equals(digits.toLowerCase());
+    // Color -> rgb()/rgba() in the same style as the original `inner` text:
+    //   "255, 0, 0" -> "rgb(161, 0, 0)" / "rgba(161, 0, 0, 0.5)"   (commas; "rgb" becomes "rgba" when alpha is added)
+    //   "255 0 0"   -> "rgb(161 0 0)"   / "rgb(161 0 0 / 0.5)"     (spaces; "_" kept for Tailwind's rgb(255_0_0))
+    // An alpha written as a percentage stays a percentage. Channels are always written as 0-255.
+    private static String formatRgb(Color c, String name, String inner) {
+        String[] parts = inner.trim().split("[\\s,/_]+");
+        boolean hadAlpha = parts.length == 4;
+        boolean alphaPct = hadAlpha && parts[3].endsWith("%");
+        boolean writeAlpha = hadAlpha || c.getAlpha() < 255;
+        String alpha = alphaPct
+                ? Math.round(c.getAlpha() / 2.55f) + "%"
+                : trimZeros(String.format(Locale.ROOT, "%.2f", c.getAlpha() / 255f));
+
+        boolean comma = inner.contains(",");
+        String sep = comma ? (inner.contains(", ") ? ", " : ",") : (inner.contains("_") ? "_" : " ");
+        String body = c.getRed() + sep + c.getGreen() + sep + c.getBlue();
+
+        String outName = name;
+        if (comma) {
+            if (writeAlpha) {
+                body += sep + alpha;
+                if (!hadAlpha) outName = name + (name.equals(name.toUpperCase()) ? "A" : "a"); // rgb -> rgba
+            }
+        } else if (writeAlpha) {
+            body += sep + "/" + sep + alpha;
+        }
+        return outName + "(" + body + ")";
+    }
+
+    private static String trimZeros(String number) { // "0.50" -> "0.5", "1.00" -> "1"
+        return number.contains(".") ? number.replaceAll("0+$", "").replaceAll("\\.$", "") : number;
     }
 
     // ---- 4b. Tailwind: a row of the 11 shades; click one to swap the shade number ---------------
 
-    private static void showShades(Editor editor, int start, MouseEvent click) {
+    // Returns false if the mark isn't a <colour>-<shade> class (then it's white/black, see 4c).
+    private static boolean showShades(Editor editor, int start, MouseEvent click) {
         Matcher m = TW.matcher(editor.getDocument().getImmutableCharSequence());
-        if (!m.find(start) || m.start() != start) return;
+        if (!m.find(start) || m.start() != start) return false;
         String name = m.group(1);
-        String currentShade = m.group(2);
         String[] hexes = shadesFor(editor.getProject(), name);
 
-        JPanel row = new JPanel(new GridLayout(1, SHADES.length, JBUI.scale(2), 0));
+        Color[] colors = new Color[SHADES.length];
+        String[] tips = new String[SHADES.length];
+        for (int i = 0; i < SHADES.length; i++) {
+            colors[i] = parseHex(hexes[i].substring(1));
+            tips[i] = name + "-" + SHADES[i] + "  " + hexes[i];
+        }
+        // "hover:bg-red-600/50" -> "hover:bg-red-500/50": only the shade number (group 2) changes.
+        showRow(click, SHADES, colors, tips, m.group(2),
+                shade -> replaceGroup(editor, start, TW, 2, shade, "Change Tailwind Shade"));
+        return true;
+    }
+
+    // ---- 4c. Tailwind white/black: two choices; click one to swap the word ----------------------
+
+    private static void showBlackWhite(Editor editor, int start, MouseEvent click) {
+        Matcher m = TW_BW.matcher(editor.getDocument().getImmutableCharSequence());
+        if (!m.find(start) || m.start() != start) return;
+
+        String[] words = {"white", "black"};
+        // "text-white/80" -> "text-black/80": only the word (group 1) changes.
+        showRow(click, words, new Color[]{Color.WHITE, Color.BLACK}, new String[]{"white  #ffffff", "black  #000000"},
+                m.group(1), word -> replaceGroup(editor, start, TW_BW, 1, word, "Change Tailwind Colour"));
+    }
+
+    // ---- Shared by 4b and 4c -------------------------------------------------------------------
+
+    // A popup row of colour boxes with labels; the current one is outlined; a click calls onPick with its label.
+    private static void showRow(MouseEvent click, String[] labels, Color[] colors, String[] tips, String current,
+                                Consumer<String> onPick) {
+        JPanel row = new JPanel(new GridLayout(1, labels.length, JBUI.scale(2), 0));
         row.setBorder(JBUI.Borders.empty(6));
         JBPopup[] popup = new JBPopup[1]; // filled in below; the cells need it to close the popup
 
-        for (int i = 0; i < SHADES.length; i++) {
-            String shade = SHADES[i];
-            ShadeCell cell = new ShadeCell(parseHex(hexes[i].substring(1)), shade, shade.equals(currentShade));
-            cell.setToolTipText(name + "-" + shade + "  " + hexes[i]);
+        for (int i = 0; i < labels.length; i++) {
+            String label = labels[i];
+            ShadeCell cell = new ShadeCell(colors[i], label, label.equals(current));
+            cell.setToolTipText(tips[i]);
             cell.addMouseListener(new MouseAdapter() {
                 @Override
                 public void mouseClicked(MouseEvent ev) {
-                    replaceShade(editor, start, shade);
+                    onPick.accept(label);
                     popup[0].cancel();
                 }
             });
@@ -375,18 +493,20 @@ public class HexSwatchListener implements EditorFactoryListener {
         popup[0].show(new RelativePoint(click));
     }
 
-    // "hover:bg-red-600/50" -> "hover:bg-red-500/50": only the shade number changes.
-    private static void replaceShade(Editor editor, int start, String shade) {
+    // Re-find the colour at `start` and replace one regex group in it (0 = all of it).
+    // The group id makes every change from one picker drag undo as a single step.
+    private static void replaceGroup(Editor editor, int start, Pattern pattern, int group, String text, String undoName) {
         Document doc = editor.getDocument();
-        Matcher m = TW.matcher(doc.getImmutableCharSequence());
+        Matcher m = pattern.matcher(doc.getImmutableCharSequence());
         if (!m.find(start) || m.start() != start) return; // text moved or was edited meanwhile
 
         WriteCommandAction.writeCommandAction(editor.getProject())
-                .withName("Change Tailwind Shade")
-                .run(() -> doc.replaceString(m.start(2), m.end(2), shade));
+                .withName(undoName)
+                .withGroupId("hexswatch-" + start)
+                .run(() -> doc.replaceString(m.start(group), m.end(group), text));
     }
 
-    // One shade in the popup: a colour box with its number underneath; the current one is outlined.
+    // One choice in the popup: a colour box with its label ("600", "white") underneath; the current one is outlined.
     static class ShadeCell extends JComponent {
         final Color color;
         final String shade;
@@ -396,7 +516,8 @@ public class HexSwatchListener implements EditorFactoryListener {
             this.color = color;
             this.shade = shade;
             this.current = current;
-            setPreferredSize(JBUI.size(30, 42));
+            int labelWidth = getFontMetrics(JBUI.Fonts.miniFont()).stringWidth(shade) + JBUI.scale(6);
+            setPreferredSize(new Dimension(Math.max(JBUI.scale(30), labelWidth), JBUI.scale(42)));
             setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
         }
 
