@@ -14,6 +14,8 @@
   <li><b>rgb() and rgba()</b> (<code>rgb(255, 0, 0)</code>, <code>rgba(0,128,255,.5)</code>, <code>rgb(255 0 0 / 50%)</code>)
       also get a <b>circle</b> and the same picker. The new colour is written in the same style: commas or spaces,
       and a percentage opacity stays a percentage.</li>
+  <li><b>hsl(), hsla() and oklch()</b> (<code>hsl(0 100% 50%)</code>, <code>hsla(210, 50%, 40%, .8)</code>,
+      <code>oklch(63.7% 0.237 25.331)</code>) get a <b>circle</b> too, written back in the same format and style.</li>
   <li><b>Tailwind colour classes</b> (<code>border-red-600</code>, <code>hover:text-sky-300/50</code>) get a <b>diamond</b>.
       Click it for a row of that colour's shades, 50 to 950. Pick one and only the shade number changes.</li>
   <li><b>Tailwind white and black</b> (<code>text-white</code>, <code>bg-black/50</code>) also get a <b>diamond</b>.
@@ -30,6 +32,10 @@
 ]]></description>
 
     <change-notes><![CDATA[
+<h3>1.5.0</h3>
+<ul>
+  <li>New: <code>hsl()</code>, <code>hsla()</code> and <code>oklch()</code> colours get a circle and the colour picker (the format Tailwind 4 and shadcn/ui use). The picked colour is written back in the same format and style.</li>
+</ul>
 <h3>1.4.1</h3>
 <ul>
   <li>The Tailwind shade row and white/black popup open just below the clicked line, or just above it near the bottom of the screen, so they never cover the colour being changed.</li>

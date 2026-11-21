@@ -7,13 +7,19 @@ before every colour in **any** file, including places the IDE's own swatches mis
   Click it for the IDE's colour picker; the hex updates as you drag.
 - **rgb() / rgba()** (`rgb(255, 0, 0)`, `rgba(0,128,255,.5)`, `rgb(255 0 0 / 50%)`): a **circle** too, same picker.
   The new colour is written in the same style (commas or spaces, alpha as decimal or %).
+- **hsl() / hsla() / oklch()** (`hsl(0 100% 50%)`, `hsla(210, 50%, 40%, .8)`, `oklch(63.7% 0.237 25.331)`):
+  a **circle**, same picker, written back in the same format and style.
 - **Tailwind colour classes** (`border-red-600`, `hover:text-sky-300/50`): a **diamond**.
   Click it for a row of that colour's shades, 50 to 950; only the shade number changes.
   `text-white`, `bg-black/50` and the like get a diamond too: click it to swap between white and black.
   Colours follow the project's Tailwind version (3 or 4, read from `node_modules` or `package.json`).
 
-It reads the plain text, so it works in CSS, Blade, HTML, JS, PHP, Vue, Markdown and anything else. The scan runs
-300 ms after you stop typing; files over 2 MB are skipped. It changes no IDE settings.
+It reads the plain text, so it works in CSS, Blade, HTML, JS, PHP, Vue, Markdown and anything else.
+It changes no IDE settings.
+
+## Performance
+- Scans only when a file opens and 300 ms after you stop typing, never on every key.
+- One pass through the file per kind of mark, no background indexing. Files over 2 MB are skipped.
 
 ## Screenshots
 Every kind of mark in one file ([`docs/screenshots/demo.css`](docs/screenshots/demo.css)):

@@ -1,6 +1,7 @@
 // Hex Swatch: a small colour mark before every colour in any file; click it to change the colour.
 //   - Hex colours (#abc, #aabbcc, #aabbccaa)            -> circle  -> PhpStorm's colour picker
 //   - rgb()/rgba() (rgb(255, 0, 0), rgb(255 0 0 / 50%)) -> circle  -> same picker, written back in the same style
+//   - hsl()/hsla() (hsl(0 100% 50%)), oklch() (oklch(63.7% 0.237 25.331)) -> circle -> same picker, same style
 //   - Tailwind colour classes (hover:bg-red-600, /50)  -> diamond -> a row of that colour's shades (50-950)
 //     Colours follow the project's Tailwind version: 3 or 4 (tableFor()).
 //   - Tailwind white/black (text-white, bg-black/50)   -> diamond -> white / black, to swap between them
@@ -145,9 +146,10 @@ public class HexSwatchListener implements EditorFactoryListener {
     // <prefix>-white or <prefix>-black, optional /<opacity>. Groups: 1 white|black, 2 opacity (may be null).
     private static final Pattern TW_BW = Pattern.compile(PREFIX + "(white|black)(?:/(\\d{1,3}))?(?![\\w-])");
 
-    // rgb(...) / rgba(...), any case. Groups: 1 the name, 2 what's inside the brackets, checked by parseRgb().
-    // [^()] skips anything with brackets inside, like rgb(var(--x)).
-    private static final Pattern RGB = Pattern.compile("(?i)(?<![\\w-])(rgba?)\\(([^()]*)\\)");
+    // Colour functions, any case: rgb(), rgba(), hsl(), hsla(), oklch(). One search for all five.
+    // Groups: 1 the name, 2 what's inside the brackets, checked by parseFunction().
+    // [^()] skips anything with brackets inside, like rgb(var(--x)) or oklch(from var(--x) l c h).
+    private static final Pattern FUNC = Pattern.compile("(?i)(?<![\\w-])(rgba?|hsla?|oklch)\\(([^()]*)\\)");
 
     private static final int MAX_FILE_CHARS = 2_000_000; // skip huge files (minified bundles, dumps)
     private static final int SCAN_DELAY_MS = 300;
@@ -217,10 +219,10 @@ public class HexSwatchListener implements EditorFactoryListener {
             while (hex.find()) {
                 wanted.put(hex.start(), new Swatch(parseHex(hex.group(1)), false));
             }
-            Matcher rgb = RGB.matcher(text);
-            while (rgb.find()) {
-                Color c = parseRgb(rgb.group(2));
-                if (c != null) wanted.put(rgb.start(), new Swatch(c, false));
+            Matcher fn = FUNC.matcher(text);
+            while (fn.find()) {
+                Color c = parseFunction(fn.group(1), fn.group(2));
+                if (c != null) wanted.put(fn.start(), new Swatch(c, false));
             }
             Matcher bw = TW_BW.matcher(text);
             while (bw.find()) {
@@ -265,30 +267,110 @@ public class HexSwatchListener implements EditorFactoryListener {
         return new Color(r, g, b, a);
     }
 
-    // The inside of rgb(...): "255, 0, 0", "255 0 0 / 50%", "100% 0% 0%", "255,0,0,.5", Tailwind's "255_0_0".
-    // Returns null if it isn't 3 colour numbers plus an optional alpha (then no circle is drawn).
-    private static Color parseRgb(String inner) {
-        String[] parts = inner.trim().split("[\\s,/_]+");
-        if (parts.length != 3 && parts.length != 4) return null;
+    // The inside of a colour function -> Color. Returns null if it isn't 3 colour numbers plus an optional alpha
+    // (then no circle is drawn). Separators: commas, spaces, "/" before the alpha, Tailwind's "_".
+    //   rgb:   "255, 0, 0", "255 0 0 / 50%", "100% 0% 0%", "255,0,0,.5", "255_0_0"
+    //   hsl:   "0, 100%, 50%", "0 100% 50% / .5", "120deg 50 50"  (hue in deg/turn/rad/grad or a bare number)
+    //   oklch: "63.7% 0.237 25.331", "0.637 0.237 25.331 / 50%"
+    private static Color parseFunction(String name, String inner) {
+        String[] p = parts(inner);
+        if (p.length != 3 && p.length != 4) return null;
         try {
-            int[] rgb = new int[3];
-            for (int i = 0; i < 3; i++) {
-                String p = parts[i];
-                float v = p.endsWith("%") ? Float.parseFloat(p.substring(0, p.length() - 1)) * 2.55f : Float.parseFloat(p);
-                if (v < 0 || v > 255.5f) return null;
-                rgb[i] = Math.round(v);
-            }
-            int a = 255;
-            if (parts.length == 4) {
-                String p = parts[3];
-                float v = p.endsWith("%") ? Float.parseFloat(p.substring(0, p.length() - 1)) / 100 : Float.parseFloat(p);
-                if (v < 0 || v > 1) return null;
-                a = Math.round(v * 255);
-            }
-            return new Color(rgb[0], rgb[1], rgb[2], a);
+            int a = p.length == 4 ? parseAlpha(p[3]) : 255;
+            String n = name.toLowerCase(Locale.ROOT);
+            Color c = n.startsWith("rgb") ? parseRgb(p) : n.startsWith("hsl") ? parseHsl(p) : parseOklch(p);
+            if (c == null || a < 0) return null;
+            return new Color(c.getRed(), c.getGreen(), c.getBlue(), a);
         } catch (NumberFormatException e) {
-            return null; // "rgb(r, g, b)" in a comment, "rgba($color, 0.5)" in Sass...
+            return null; // "rgb(r, g, b)" in a comment, "rgba($color, 0.5)" in Sass, "none" in oklch...
         }
+    }
+
+    private static String[] parts(String inner) {
+        return inner.trim().split("[\\s,/_]+");
+    }
+
+    // "50%" -> 50, "50" -> 50.
+    private static float number(String p) {
+        return Float.parseFloat(p.endsWith("%") ? p.substring(0, p.length() - 1) : p);
+    }
+
+    // "0.5" or "50%" -> 0-255, or -1 if out of range.
+    private static int parseAlpha(String p) {
+        float v = p.endsWith("%") ? number(p) / 100 : number(p);
+        return v < 0 || v > 1 ? -1 : Math.round(v * 255);
+    }
+
+    // rgb: each channel 0-255, or 0%-100%.
+    private static Color parseRgb(String[] p) {
+        int[] rgb = new int[3];
+        for (int i = 0; i < 3; i++) {
+            float v = p[i].endsWith("%") ? number(p[i]) * 2.55f : number(p[i]);
+            if (v < 0 || v > 255.5f) return null;
+            rgb[i] = Math.round(v);
+        }
+        return new Color(rgb[0], rgb[1], rgb[2]);
+    }
+
+    // hsl: hue, then saturation and lightness 0-100 (with or without %). CSS's own formula.
+    private static Color parseHsl(String[] p) {
+        float h = parseHue(p[0]);
+        float s = number(p[1]) / 100;
+        float l = number(p[2]) / 100;
+        if (s < 0 || s > 1 || l < 0 || l > 1) return null;
+        float a = s * Math.min(l, 1 - l);
+        float[] rgb = new float[3];
+        int[] offsets = {0, 8, 4}; // red, green, blue
+        for (int i = 0; i < 3; i++) {
+            float k = (offsets[i] + h / 30) % 12;
+            rgb[i] = l - a * Math.max(-1, Math.min(Math.min(k - 3, 9 - k), 1));
+        }
+        return rgbColor(rgb[0], rgb[1], rgb[2]);
+    }
+
+    // oklch: lightness 0-1 (or 0%-100%), chroma 0-0.4ish (100% = 0.4), hue.
+    // OKLCH -> OKLab -> linear sRGB -> sRGB, Björn Ottosson's matrices (the ones CSS uses).
+    // Colours outside what a screen can show are clipped to the nearest edge (browsers adjust them a bit more gently).
+    private static Color parseOklch(String[] p) {
+        double l = p[0].endsWith("%") ? number(p[0]) / 100 : number(p[0]);
+        double c = p[1].endsWith("%") ? number(p[1]) * 0.004 : number(p[1]);
+        double h = Math.toRadians(parseHue(p[2]));
+        if (l < 0 || l > 1 || c < 0) return null;
+        double a = c * Math.cos(h), b = c * Math.sin(h);
+
+        double lc = Math.pow(l + 0.3963377774 * a + 0.2158037573 * b, 3);
+        double mc = Math.pow(l - 0.1055613458 * a - 0.0638541728 * b, 3);
+        double sc = Math.pow(l - 0.0894841775 * a - 1.2914855480 * b, 3);
+        return rgbColor(
+                toGamma(4.0767416621 * lc - 3.3077115913 * mc + 0.2309699292 * sc),
+                toGamma(-1.2684380046 * lc + 2.6097574011 * mc - 0.3413193965 * sc),
+                toGamma(-0.0041960863 * lc - 0.7034186147 * mc + 1.7076147010 * sc));
+    }
+
+    // "200", "200deg", "0.5turn", "3.14rad", "200grad" -> degrees, 0-360.
+    private static float parseHue(String p) {
+        String h = p.toLowerCase(Locale.ROOT);
+        float deg = h.endsWith("deg") ? Float.parseFloat(h.substring(0, h.length() - 3))
+                : h.endsWith("grad") ? Float.parseFloat(h.substring(0, h.length() - 4)) * 0.9f
+                : h.endsWith("turn") ? Float.parseFloat(h.substring(0, h.length() - 4)) * 360
+                : h.endsWith("rad") ? (float) Math.toDegrees(Float.parseFloat(h.substring(0, h.length() - 3)))
+                : Float.parseFloat(h);
+        return ((deg % 360) + 360) % 360;
+    }
+
+    // Light-linear value -> screen value (sRGB curve), and back.
+    private static float toGamma(double x) {
+        return (float) (x <= 0.0031308 ? 12.92 * x : 1.055 * Math.pow(x, 1 / 2.4) - 0.055);
+    }
+
+    private static double toLinear(int channel) {
+        double x = channel / 255.0;
+        return x <= 0.04045 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4);
+    }
+
+    // 0-1 floats -> Color, clipped to 0-1 first (rounding can land a hair outside).
+    private static Color rgbColor(float r, float g, float b) {
+        return new Color(Math.max(0, Math.min(1, r)), Math.max(0, Math.min(1, g)), Math.max(0, Math.min(1, b)));
     }
 
     // ("red", "600", "50") -> #dc2626 at 50% opacity. Opacity null = solid.
@@ -361,22 +443,22 @@ public class HexSwatchListener implements EditorFactoryListener {
             return;
         }
 
-        // A circle: hex or rgb(). Work out how the colour is written now, so the new one is written the same way.
+        // A circle: hex or a colour function. Work out how the colour is written now, so the new one matches.
         Matcher hex = HEX.matcher(text);
         if (hex.find(start) && hex.start() == start) {
             boolean upper = !hex.group(1).equals(hex.group(1).toLowerCase()); // #A10000 stays capitals
             showPicker(editor, start, swatch.color, click, HEX, color -> formatHex(color, upper));
             return;
         }
-        Matcher rgb = RGB.matcher(text);
-        if (rgb.find(start) && rgb.start() == start) {
-            String name = rgb.group(1);
-            String inner = rgb.group(2);
-            showPicker(editor, start, swatch.color, click, RGB, color -> formatRgb(color, name, inner));
+        Matcher fn = FUNC.matcher(text);
+        if (fn.find(start) && fn.start() == start) {
+            String name = fn.group(1);
+            String inner = fn.group(2);
+            showPicker(editor, start, swatch.color, click, FUNC, color -> formatFunction(color, name, inner));
         }
     }
 
-    // ---- 4a. Hex / rgb(): PhpStorm's picker, rewrites the colour as you drag --------------------
+    // ---- 4a. Hex / rgb() / hsl() / oklch(): PhpStorm's picker, rewrites the colour as you drag ---
 
     private static void showPicker(Editor editor, int start, Color current, MouseEvent click, Pattern pattern,
                                    Function<Color, String> format) {
@@ -397,12 +479,14 @@ public class HexSwatchListener implements EditorFactoryListener {
         return upper ? hex.toUpperCase() : hex;
     }
 
-    // Color -> rgb()/rgba() in the same style as the original `inner` text:
+    // Color -> rgb()/hsl()/oklch() in the same style as the original `inner` text:
     //   "255, 0, 0" -> "rgb(161, 0, 0)" / "rgba(161, 0, 0, 0.5)"   (commas; "rgb" becomes "rgba" when alpha is added)
     //   "255 0 0"   -> "rgb(161 0 0)"   / "rgb(161 0 0 / 0.5)"     (spaces; "_" kept for Tailwind's rgb(255_0_0))
-    // An alpha written as a percentage stays a percentage. Channels are always written as 0-255.
-    private static String formatRgb(Color c, String name, String inner) {
-        String[] parts = inner.trim().split("[\\s,/_]+");
+    // An alpha written as a percentage stays a percentage. The three numbers come from rgbText/hslText/oklchText.
+    private static String formatFunction(Color c, String name, String inner) {
+        String[] parts = parts(inner);
+        String n = name.toLowerCase(Locale.ROOT);
+        String[] channels = n.startsWith("rgb") ? rgbText(c) : n.startsWith("hsl") ? hslText(c, parts) : oklchText(c, parts);
         boolean hadAlpha = parts.length == 4;
         boolean alphaPct = hadAlpha && parts[3].endsWith("%");
         boolean writeAlpha = hadAlpha || c.getAlpha() < 255;
@@ -412,18 +496,63 @@ public class HexSwatchListener implements EditorFactoryListener {
 
         boolean comma = inner.contains(",");
         String sep = comma ? (inner.contains(", ") ? ", " : ",") : (inner.contains("_") ? "_" : " ");
-        String body = c.getRed() + sep + c.getGreen() + sep + c.getBlue();
+        String body = String.join(sep, channels);
 
         String outName = name;
         if (comma) {
             if (writeAlpha) {
                 body += sep + alpha;
-                if (!hadAlpha) outName = name + (name.equals(name.toUpperCase()) ? "A" : "a"); // rgb -> rgba
+                if (n.equals("rgb") || n.equals("hsl")) {
+                    outName = name + (name.equals(name.toUpperCase()) ? "A" : "a"); // rgb -> rgba, hsl -> hsla
+                }
             }
         } else if (writeAlpha) {
             body += sep + "/" + sep + alpha;
         }
         return outName + "(" + body + ")";
+    }
+
+    // rgb: always 0-255.
+    private static String[] rgbText(Color c) {
+        return new String[]{"" + c.getRed(), "" + c.getGreen(), "" + c.getBlue()};
+    }
+
+    // hsl: whole numbers. "deg" and "%" are kept if the original had them.
+    private static String[] hslText(Color c, String[] old) {
+        float r = c.getRed() / 255f, g = c.getGreen() / 255f, b = c.getBlue() / 255f;
+        float max = Math.max(r, Math.max(g, b)), min = Math.min(r, Math.min(g, b)), d = max - min;
+        float l = (max + min) / 2;
+        float s = d == 0 ? 0 : d / (1 - Math.abs(2 * l - 1));
+        float h = d == 0 ? 0 : max == r ? 60 * (((g - b) / d) % 6) : max == g ? 60 * ((b - r) / d + 2) : 60 * ((r - g) / d + 4);
+        if (h < 0) h += 360;
+        return new String[]{
+                Math.round(h) % 360 + (old[0].toLowerCase(Locale.ROOT).endsWith("deg") ? "deg" : ""),
+                Math.round(s * 100) + (old[1].endsWith("%") ? "%" : ""),
+                Math.round(l * 100) + (old[2].endsWith("%") ? "%" : "")};
+    }
+
+    // oklch: like Tailwind writes it ("63.7% 0.237 25.3"). Lightness/chroma as % if the original used %.
+    // A hue written in turn/rad/grad comes back in degrees. Grey has no hue, so it is written as 0.
+    private static String[] oklchText(Color c, String[] old) {
+        double r = toLinear(c.getRed()), g = toLinear(c.getGreen()), b = toLinear(c.getBlue());
+        double lc = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
+        double mc = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+        double sc = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+        double l = 0.2104542553 * lc + 0.7936177850 * mc - 0.0040720468 * sc;
+        double oa = 1.9779984951 * lc - 2.4285922050 * mc + 0.4505937099 * sc;
+        double ob = 0.0259040371 * lc + 0.7827717662 * mc - 0.8086757660 * sc;
+        double chroma = Math.sqrt(oa * oa + ob * ob);
+        double hue = (Math.toDegrees(Math.atan2(ob, oa)) + 360) % 360;
+
+        String deg = old[2].toLowerCase(Locale.ROOT).endsWith("deg") ? "deg" : "";
+        return new String[]{
+                old[0].endsWith("%") ? decimals(l * 100, 1) + "%" : decimals(l, 3),
+                old[1].endsWith("%") ? decimals(chroma / 0.004, 1) + "%" : decimals(chroma, 3),
+                chroma < 0.0005 ? "0" : decimals(hue, 1) + deg};
+    }
+
+    private static String decimals(double v, int places) { // (0.6370, 3) -> "0.637"
+        return trimZeros(String.format(Locale.ROOT, "%." + places + "f", Math.max(0, v)));
     }
 
     private static String trimZeros(String number) { // "0.50" -> "0.5", "1.00" -> "1"

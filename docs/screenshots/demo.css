@@ -15,6 +15,14 @@
     border-color: rgb(161 0 0 / 50%);
 }
 
+/* hsl() / oklch(): circle -> same picker, written back in the same format */
+.card {
+    color: hsl(221 83% 53%);
+    background: hsla(0, 86%, 97%, 0.9);
+    border-color: oklch(63.7% 0.237 25.331);
+    @apply bg-[oklch(62.3%_0.214_259.815)];
+}
+
 /* Tailwind colour classes: diamond -> row of shades 50-950 */
 .button {
     @apply bg-red-600 hover:bg-red-700 border-sky-300 ring-emerald-500/50;
