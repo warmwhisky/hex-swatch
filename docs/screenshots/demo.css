@@ -1,21 +1,3 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 /* Hex Swatch: every kind of colour mark in one file. Click a mark to change the colour. */
 
 /* Hex colours: circle -> colour picker */
@@ -47,27 +29,3 @@
 .alert {
     @apply bg-[#a10000] hover:bg-[#7f1d1d]/90 text-[rgb(255_237_213)];
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
