@@ -11,7 +11,9 @@ before every colour in **any** file, including places the IDE's own swatches mis
   a **circle**, same picker, written back in the same format and style.
 - **Tailwind colour classes** (`border-red-600`, `hover:text-sky-300/50`): a **diamond**.
   Click it for a row of that colour's shades, 50 to 950; only the shade number changes.
-  `text-white`, `bg-black/50` and the like get a diamond too: click it to swap between white and black.
+  Under the shades is every Tailwind colour at the current shade; pick one and only the colour name changes
+  (`bg-red-500` → `bg-blue-500`). Hover a colour for its name.
+  `text-white`, `bg-black/50` and the like get a diamond too: click it for every colour at 500, plus white and black.
   Colours follow the project's Tailwind version (3 or 4, read from `node_modules` or `package.json`).
 - **Tailwind sizes** (off by default): click a size class like `p-4`, `-mt-2`, `w-12`, `text-lg`, `rounded-md` or
   `shadow-sm` for a row of sizes; only the size changes (`hover:px-4` → `hover:px-6`). No marks, and any key closes

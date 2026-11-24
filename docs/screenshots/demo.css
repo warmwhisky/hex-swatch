@@ -28,7 +28,7 @@
     @apply bg-red-600 hover:bg-red-700 border-sky-300 ring-emerald-500/50;
 }
 
-/* Tailwind white / black: diamond -> swap between white and black */
+/* Tailwind white / black: diamond -> swap between all colours */
 .badge {
     @apply text-white dark:text-black bg-black/80;
 }

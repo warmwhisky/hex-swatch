@@ -17,9 +17,11 @@
   <li><b>hsl(), hsla() and oklch()</b> (<code>hsl(0 100% 50%)</code>, <code>hsla(210, 50%, 40%, .8)</code>,
       <code>oklch(63.7% 0.237 25.331)</code>) get a <b>circle</b> too, written back in the same format and style.</li>
   <li><b>Tailwind colour classes</b> (<code>border-red-600</code>, <code>hover:text-sky-300/50</code>) get a <b>diamond</b>.
-      Click it for a row of that colour's shades, 50 to 950. Pick one and only the shade number changes.</li>
+      Click it for a row of that colour's shades, 50 to 950. Pick one and only the shade number changes.
+      Under the shades is every Tailwind colour at the current shade: pick one and only the colour name changes
+      (<code>bg-red-500</code> → <code>bg-blue-500</code>).</li>
   <li><b>Tailwind white and black</b> (<code>text-white</code>, <code>bg-black/50</code>) also get a <b>diamond</b>.
-      Click it to swap between white and black.</li>
+      Click it for every colour at 500, plus white and black.</li>
   <li><b>Tailwind sizes</b> (off by default): click a size class like <code>p-4</code>, <code>-mt-2</code>, <code>w-12</code>,
       <code>text-lg</code>, <code>rounded-md</code> or <code>shadow-sm</code> for a row of sizes. Only the size changes.
       Turn it on in Settings → Tools → Hex Swatch.</li>
@@ -35,6 +37,11 @@
 ]]></description>
 
     <change-notes><![CDATA[
+<h3>1.7.0</h3>
+<ul>
+  <li>New: the Tailwind diamond popup also shows every Tailwind colour at the current shade. Pick one and only the colour name changes (<code>hover:bg-red-500/50</code> → <code>hover:bg-blue-500/50</code>). Hover a colour for its name.</li>
+  <li>White and black are in the same row: <code>bg-red-500</code> → <code>bg-white</code>, and <code>bg-white</code> → <code>bg-red-500</code>.</li>
+</ul>
 <h3>1.6.0</h3>
 <ul>
   <li>New, off by default: click a Tailwind size class like <code>p-4</code>, <code>w-12</code>, <code>text-lg</code> or <code>rounded-md</code> for a row of sizes; pick one and only the size changes (<code>hover:px-4</code> → <code>hover:px-6</code>).</li>

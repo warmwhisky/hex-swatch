@@ -2,9 +2,9 @@
 //   - Hex colours (#abc, #aabbcc, #aabbccaa)            -> circle  -> PhpStorm's colour picker
 //   - rgb()/rgba() (rgb(255, 0, 0), rgb(255 0 0 / 50%)) -> circle  -> same picker, written back in the same style
 //   - hsl()/hsla() (hsl(0 100% 50%)), oklch() (oklch(63.7% 0.237 25.331)) -> circle -> same picker, same style
-//   - Tailwind colour classes (hover:bg-red-600, /50)  -> diamond -> a row of that colour's shades (50-950)
-//     Colours follow the project's Tailwind version: 3 or 4 (tableFor()).
-//   - Tailwind white/black (text-white, bg-black/50)   -> diamond -> white / black, to swap between them
+//   - Tailwind colour classes (hover:bg-red-600, /50)  -> diamond -> a row of that colour's shades (50-950),
+//     and under it every colour at that shade, to swap the colour name. Follows the project's Tailwind 3 or 4.
+//   - Tailwind white/black (text-white, bg-black/50)   -> diamond -> every colour at 500, plus white and black
 //   - Tailwind sizes (p-4, -mt-2, w-8, text-sm, rounded-lg, shadow-md) -> no mark; a plain click on the class
 //     shows a row of its sizes. Off by default: Settings -> Tools -> Hex Swatch (Settings / SettingsPage below).
 //
@@ -607,13 +607,14 @@ public class HexSwatchListener implements EditorFactoryListener {
         return number.contains(".") ? number.replaceAll("0+$", "").replaceAll("\\.$", "") : number;
     }
 
-    // ---- 4b. Tailwind: a row of the 11 shades; click one to swap the shade number ---------------
+    // ---- 4b. Tailwind: the 11 shades, and under them every colour at the current shade ----------
 
     // Returns false if the mark isn't a <colour>-<shade> class (then it's white/black, see 4c).
     private static boolean showShades(Editor editor, int start, MouseEvent click) {
         Matcher m = TW.matcher(editor.getDocument().getImmutableCharSequence());
         if (!m.find(start) || m.start() != start) return false;
         String name = m.group(1);
+        String shade = m.group(2);
         String[] hexes = shadesFor(editor.getProject(), name);
 
         Color[] colors = new Color[SHADES.length];
@@ -622,23 +623,72 @@ public class HexSwatchListener implements EditorFactoryListener {
             colors[i] = parseHex(hexes[i].substring(1));
             tips[i] = name + "-" + SHADES[i] + "  " + hexes[i];
         }
-        // "hover:bg-red-600/50" -> "hover:bg-red-500/50": only the shade number (group 2) changes.
-        showRow(editor, start, click, SHADES, colors, tips, m.group(2), true,
-                shade -> replaceGroup(editor, start, TW, 2, shade, "Change Tailwind Shade"));
+        JBPopup[] popup = new JBPopup[1]; // filled in by showPopup(); the cells need it to close the popup
+        // Top row: "hover:bg-red-600/50" -> "hover:bg-red-500/50": only the shade number (group 2) changes.
+        JPanel shadeRow = grid(SHADES, colors, tips, shade, SHADES.length, true, popup,
+                s -> replaceGroup(editor, start, TW, 2, s, "Change Tailwind Shade"));
+        // Colour rows: "bg-red-500/50" -> "bg-blue-500/50" (group 1 changes),
+        // or -> "bg-white/50" (colour and shade, groups 1 to 2, become the one word).
+        JPanel colourRows = colourGrid(editor.getProject(), shade, name, popup, colour ->
+                replaceGroups(editor, start, TW, 1, isBlackOrWhite(colour) ? 2 : 1, colour, "Change Tailwind Colour"));
+        showPopup(editor, start, click, stack(shadeRow, colourRows), true, popup);
         return true;
     }
 
-    // ---- 4c. Tailwind white/black: two choices; click one to swap the word ----------------------
+    // ---- 4c. Tailwind white/black: only the colour rows (no shades), at 500 --------------------
 
     private static void showBlackWhite(Editor editor, int start, MouseEvent click) {
         Matcher m = TW_BW.matcher(editor.getDocument().getImmutableCharSequence());
         if (!m.find(start) || m.start() != start) return;
 
-        String[] words = {"white", "black"};
-        // "text-white/80" -> "text-black/80": only the word (group 1) changes.
-        showRow(editor, start, click, words, new Color[]{Color.WHITE, Color.BLACK},
-                new String[]{"white  #ffffff", "black  #000000"},
-                m.group(1), true, word -> replaceGroup(editor, start, TW_BW, 1, word, "Change Tailwind Colour"));
+        JBPopup[] popup = new JBPopup[1];
+        // "text-white/80" -> "text-black/80" or "text-red-500/80": the word (group 1) changes; a colour gets "-500".
+        JPanel colourRows = colourGrid(editor.getProject(), "500", m.group(1), popup, colour ->
+                replaceGroup(editor, start, TW_BW, 1, isBlackOrWhite(colour) ? colour : colour + "-500", "Change Tailwind Colour"));
+        showPopup(editor, start, click, stack(colourRows), true, popup);
+    }
+
+    // Every colour of this project's Tailwind at one shade, then white and black, in two rows of small
+    // unlabelled boxes (the tooltip gives the name). `current` is outlined. A click calls onPick with the colour name.
+    private static JPanel colourGrid(Project project, String shade, String current, JBPopup[] popup, Consumer<String> onPick) {
+        Map<String, String[]> table = tableFor(project);
+        int n = table.size() + 2;
+        String[] names = new String[n];
+        Color[] colors = new Color[n];
+        String[] tips = new String[n];
+        int i = 0;
+        for (Map.Entry<String, String[]> e : table.entrySet()) {
+            String hex = e.getValue()[shadeIndex(shade)];
+            names[i] = e.getKey();
+            colors[i] = parseHex(hex.substring(1));
+            tips[i] = e.getKey() + "-" + shade + "  " + hex;
+            i++;
+        }
+        names[i] = "white";
+        colors[i] = Color.WHITE;
+        tips[i++] = "white  #ffffff";
+        names[i] = "black";
+        colors[i] = Color.BLACK;
+        tips[i] = "black  #000000";
+        return grid(names, colors, tips, current, (n + 1) / 2, false, popup, onPick);
+    }
+
+    private static boolean isBlackOrWhite(String word) {
+        return word.equals("white") || word.equals("black");
+    }
+
+    // Puts the rows under each other, left-aligned, with a small gap between them.
+    private static JPanel stack(JPanel... rows) {
+        JPanel box = new JPanel();
+        box.setLayout(new BoxLayout(box, BoxLayout.Y_AXIS));
+        box.setBorder(JBUI.Borders.empty(6));
+        for (int i = 0; i < rows.length; i++) {
+            if (i > 0) box.add(Box.createVerticalStrut(JBUI.scale(6)));
+            rows[i].setAlignmentX(Component.LEFT_ALIGNMENT);
+            rows[i].setMaximumSize(rows[i].getPreferredSize()); // don't stretch to the widest row
+            box.add(rows[i]);
+        }
+        return box;
     }
 
     // ---- 4d. Tailwind sizes: a plain click on p-4, w-8, text-sm... shows a row of sizes ----------
@@ -708,22 +758,24 @@ public class HexSwatchListener implements EditorFactoryListener {
 
     // ---- Shared by 4b, 4c and 4d ---------------------------------------------------------------
 
-    // A popup row of boxes with labels; the current one is outlined; a click calls onPick with its label.
-    // colors null = text-only boxes (sizes). Long rows wrap at 18. takeFocus false = the editor keeps the keyboard
-    // and any key press closes the row, so the click that opened it still works as a normal click. It also doesn't
-    // close itself on an outside click (that would swallow the click and break double-click word selection):
-    // the editor's mousePressed closes it instead, and leaving the editor (focus lost) closes it too.
+    // A popup with one row of boxes (sizes). See grid() for the boxes and showPopup() for how it behaves.
     private static JBPopup showRow(Editor editor, int start, MouseEvent click, String[] labels, Color[] colors,
                                    String[] tips, String current, boolean takeFocus, Consumer<String> onPick) {
-        int columns = Math.min(labels.length, 18);
-        int rows = (labels.length + columns - 1) / columns;
-        JPanel row = new JPanel(new GridLayout(rows, columns, JBUI.scale(2), JBUI.scale(2)));
+        JBPopup[] popup = new JBPopup[1]; // filled in by showPopup(); the cells need it to close the popup
+        JPanel row = grid(labels, colors, tips, current, Math.min(labels.length, 18), true, popup, onPick);
         row.setBorder(JBUI.Borders.empty(6));
-        JBPopup[] popup = new JBPopup[1]; // filled in below; the cells need it to close the popup
+        return showPopup(editor, start, click, row, takeFocus, popup);
+    }
 
+    // Boxes in a grid, `columns` wide; the current one is outlined; a click calls onPick with its label and closes
+    // popup[0]. colors null = text-only boxes (sizes). showLabels false = small colour boxes, name only in the tooltip.
+    private static JPanel grid(String[] labels, Color[] colors, String[] tips, String current, int columns,
+                               boolean showLabels, JBPopup[] popup, Consumer<String> onPick) {
+        int rows = (labels.length + columns - 1) / columns;
+        JPanel grid = new JPanel(new GridLayout(rows, columns, JBUI.scale(2), JBUI.scale(2)));
         for (int i = 0; i < labels.length; i++) {
             String label = labels[i];
-            ShadeCell cell = new ShadeCell(colors == null ? null : colors[i], label, label.equals(current));
+            ShadeCell cell = new ShadeCell(colors == null ? null : colors[i], label, label.equals(current), showLabels);
             cell.setToolTipText(tips[i]);
             cell.addMouseListener(new MouseAdapter() {
                 @Override
@@ -732,9 +784,17 @@ public class HexSwatchListener implements EditorFactoryListener {
                     popup[0].cancel();
                 }
             });
-            row.add(cell);
+            grid.add(cell);
         }
+        return grid;
+    }
 
+    // Shows `row` under (or above) the clicked line. takeFocus false = the editor keeps the keyboard
+    // and any key press closes the row, so the click that opened it still works as a normal click. It also doesn't
+    // close itself on an outside click (that would swallow the click and break double-click word selection):
+    // the editor's mousePressed closes it instead, and leaving the editor (focus lost) closes it too.
+    private static JBPopup showPopup(Editor editor, int start, MouseEvent click, JPanel row, boolean takeFocus,
+                                     JBPopup[] popup) {
         popup[0] = JBPopupFactory.getInstance()
                 .createComponentPopupBuilder(row, null)
                 .setRequestFocus(takeFocus)
@@ -785,6 +845,13 @@ public class HexSwatchListener implements EditorFactoryListener {
     // Re-find the colour at `start` and replace one regex group in it (0 = all of it).
     // The group id makes every change from one picker drag undo as a single step.
     private static void replaceGroup(Editor editor, int start, Pattern pattern, int group, String text, String undoName) {
+        replaceGroups(editor, start, pattern, group, group, text, undoName);
+    }
+
+    // Same, but replaces everything from the start of group `first` to the end of group `last`
+    // ("red-500" in bg-red-500/50 is groups 1 to 2).
+    private static void replaceGroups(Editor editor, int start, Pattern pattern, int first, int last, String text,
+                                      String undoName) {
         Document doc = editor.getDocument();
         Matcher m = pattern.matcher(doc.getImmutableCharSequence());
         if (!m.find(start) || m.start() != start) return; // text moved or was edited meanwhile
@@ -792,22 +859,26 @@ public class HexSwatchListener implements EditorFactoryListener {
         WriteCommandAction.writeCommandAction(editor.getProject())
                 .withName(undoName)
                 .withGroupId("hexswatch-" + start)
-                .run(() -> doc.replaceString(m.start(group), m.end(group), text));
+                .run(() -> doc.replaceString(m.start(first), m.end(last), text));
     }
 
     // One choice in the popup: a colour box with its label ("600", "white") underneath; the current one is outlined.
-    // color null = a size: just the label ("4", "lg") in a box.
+    // color null = a size: just the label ("4", "lg") in a box. showLabel false = a smaller colour box, no label
+    // (the colour rows; the name is in the tooltip).
     static class ShadeCell extends JComponent {
         final Color color;
         final String shade;
         final boolean current;
+        final boolean showLabel;
 
-        ShadeCell(Color color, String shade, boolean current) {
+        ShadeCell(Color color, String shade, boolean current, boolean showLabel) {
             this.color = color;
             this.shade = shade;
             this.current = current;
+            this.showLabel = showLabel;
             int labelWidth = getFontMetrics(JBUI.Fonts.miniFont()).stringWidth(shade) + JBUI.scale(6);
-            setPreferredSize(new Dimension(Math.max(JBUI.scale(30), labelWidth), JBUI.scale(color == null ? 24 : 42)));
+            setPreferredSize(!showLabel ? new Dimension(JBUI.scale(24), JBUI.scale(24))
+                    : new Dimension(Math.max(JBUI.scale(30), labelWidth), JBUI.scale(color == null ? 24 : 42)));
             setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
         }
 
@@ -833,6 +904,7 @@ public class HexSwatchListener implements EditorFactoryListener {
             g.setColor(current ? JBColor.foreground() : JBColor.GRAY);
             g.setStroke(new BasicStroke(current ? JBUIScale.scale(2f) : 1f));
             g.drawRoundRect(x, x, box, box, JBUI.scale(4), JBUI.scale(4));
+            if (!showLabel) return;
 
             g.setColor(JBColor.foreground());
             g.setFont(JBUI.Fonts.miniFont());
