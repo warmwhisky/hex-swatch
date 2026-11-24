@@ -13,6 +13,10 @@ before every colour in **any** file, including places the IDE's own swatches mis
   Click it for a row of that colour's shades, 50 to 950; only the shade number changes.
   `text-white`, `bg-black/50` and the like get a diamond too: click it to swap between white and black.
   Colours follow the project's Tailwind version (3 or 4, read from `node_modules` or `package.json`).
+- **Tailwind sizes** (off by default): click a size class like `p-4`, `-mt-2`, `w-12`, `text-lg`, `rounded-md` or
+  `shadow-sm` for a row of sizes; only the size changes (`hover:px-4` → `hover:px-6`). No marks, and any key closes
+  the row. Turn it on in Settings → Tools → Hex Swatch: spacing (`p m gap space`), width/height
+  (`w h size min-w min-h max-h`), text size/rounded/shadow. Not covered: `w-full`, `w-1/2`, `p-[3px]`, `max-w-*`.
 
 It reads the plain text, so it works in CSS, Blade, HTML, JS, PHP, Vue, Markdown and anything else.
 It changes no IDE settings.

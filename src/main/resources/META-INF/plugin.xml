@@ -20,6 +20,9 @@
       Click it for a row of that colour's shades, 50 to 950. Pick one and only the shade number changes.</li>
   <li><b>Tailwind white and black</b> (<code>text-white</code>, <code>bg-black/50</code>) also get a <b>diamond</b>.
       Click it to swap between white and black.</li>
+  <li><b>Tailwind sizes</b> (off by default): click a size class like <code>p-4</code>, <code>-mt-2</code>, <code>w-12</code>,
+      <code>text-lg</code>, <code>rounded-md</code> or <code>shadow-sm</code> for a row of sizes. Only the size changes.
+      Turn it on in Settings → Tools → Hex Swatch.</li>
 </ul>
 <p>Notes:</p>
 <ul>
@@ -32,6 +35,11 @@
 ]]></description>
 
     <change-notes><![CDATA[
+<h3>1.6.0</h3>
+<ul>
+  <li>New, off by default: click a Tailwind size class like <code>p-4</code>, <code>w-12</code>, <code>text-lg</code> or <code>rounded-md</code> for a row of sizes; pick one and only the size changes (<code>hover:px-4</code> → <code>hover:px-6</code>).</li>
+  <li>Turn it on in Settings → Tools → Hex Swatch: spacing (padding, margin, gap, space), width/height, and text size/rounded/shadow.</li>
+</ul>
 <h3>1.5.0</h3>
 <ul>
   <li>New: <code>hsl()</code>, <code>hsla()</code> and <code>oklch()</code> colours get a circle and the colour picker (the format Tailwind 4 and shadcn/ui use). The picked colour is written back in the same format and style.</li>
@@ -69,5 +77,9 @@
     <depends>com.intellij.modules.platform</depends>
     <extensions defaultExtensionNs="com.intellij">
         <editorFactoryListener implementation="hexswatch.HexSwatchListener"/>
+        <!-- Settings → Tools → Hex Swatch: the size-row checkboxes (both classes are inside HexSwatchListener.java) -->
+        <applicationService serviceImplementation="hexswatch.HexSwatchListener$Settings"/>
+        <applicationConfigurable parentId="tools" id="hexswatch.settings" displayName="Hex Swatch"
+                                 instance="hexswatch.HexSwatchListener$SettingsPage"/>
     </extensions>
 </idea-plugin>

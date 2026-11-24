@@ -5,6 +5,8 @@
 //   - Tailwind colour classes (hover:bg-red-600, /50)  -> diamond -> a row of that colour's shades (50-950)
 //     Colours follow the project's Tailwind version: 3 or 4 (tableFor()).
 //   - Tailwind white/black (text-white, bg-black/50)   -> diamond -> white / black, to swap between them
+//   - Tailwind sizes (p-4, -mt-2, w-8, text-sm, rounded-lg, shadow-md) -> no mark; a plain click on the class
+//     shows a row of its sizes. Off by default: Settings -> Tools -> Hex Swatch (Settings / SettingsPage below).
 //
 // Loaded by: META-INF/plugin.xml (<editorFactoryListener>). PhpStorm calls editorCreated() for every editor it opens.
 // Calls:     PhpStorm's inlay API (the marks), ColorChooserService (colour picker), JBPopupFactory (shade row).
@@ -14,11 +16,16 @@
 //   2. scheduleScan()    - after typing stops for 300 ms, scan() runs once (not on every key).
 //   3. scan()            - one regex pass per kind over the file text; adds marks for new colours, removes stale ones.
 //   4. onClick()         - a click on a mark opens the colour picker or the shade row; a choice rewrites the text.
+//                          A click on text goes to onTextClick() (4d), which looks only at the clicked line.
 
 package hexswatch;
 
 import com.intellij.openapi.Disposable;
+import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.command.WriteCommandAction;
+import com.intellij.openapi.components.PersistentStateComponent;
+import com.intellij.openapi.components.State;
+import com.intellij.openapi.components.Storage;
 import com.intellij.openapi.editor.Document;
 import com.intellij.openapi.editor.Editor;
 import com.intellij.openapi.editor.EditorCustomElementRenderer;
@@ -31,6 +38,7 @@ import com.intellij.openapi.editor.event.EditorFactoryListener;
 import com.intellij.openapi.editor.event.EditorMouseEvent;
 import com.intellij.openapi.editor.event.EditorMouseListener;
 import com.intellij.openapi.editor.markup.TextAttributes;
+import com.intellij.openapi.options.Configurable;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.ui.popup.JBPopup;
 import com.intellij.openapi.ui.popup.JBPopupFactory;
@@ -43,10 +51,15 @@ import com.intellij.ui.awt.RelativePoint;
 import com.intellij.ui.scale.JBUIScale;
 import com.intellij.util.Alarm;
 import com.intellij.util.ui.JBUI;
+import com.intellij.util.xmlb.XmlSerializerUtil;
 import org.jetbrains.annotations.NotNull;
 
 import javax.swing.*;
 import java.awt.*;
+import java.awt.event.FocusAdapter;
+import java.awt.event.FocusEvent;
+import java.awt.event.KeyAdapter;
+import java.awt.event.KeyEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.geom.Ellipse2D;
@@ -151,6 +164,32 @@ public class HexSwatchListener implements EditorFactoryListener {
     // [^()] skips anything with brackets inside, like rgb(var(--x)) or oklch(from var(--x) l c h).
     private static final Pattern FUNC = Pattern.compile("(?i)(?<![\\w-])(rgba?|hsla?|oklch)\\(([^()]*)\\)");
 
+    // Tailwind size classes, only checked on the clicked line (4d). Groups: 1 the prefix ("px", "-mt", "rounded-t"),
+    // 2 the size with its dash ("-4", "-lg"), which is the part a pick replaces. Empty for a bare "rounded"/"shadow".
+    private static final String SPACE_VALUE = "(?:px|\\d+(?:\\.5)?)"; // 0, px, 0.5, 4, 96...
+    private static final Pattern SPACING = Pattern.compile( // setting: spacing
+            "(?<![\\w-])(-?(?:p[xytrblse]?|m[xytrblse]?|gap(?:-[xy])?|space-[xy]))(-" + SPACE_VALUE + ")(?![\\w./-])");
+    private static final Pattern SIZING = Pattern.compile(  // setting: sizing
+            "(?<![\\w-])(w|h|size|min-w|min-h|max-h)(-" + SPACE_VALUE + ")(?![\\w./-])");
+    private static final Pattern TEXT_SIZE = Pattern.compile( // setting: look ("text-sm/6" keeps its /6)
+            "(?<![\\w-])(text)(-(?:xs|sm|base|lg|xl|[2-9]xl))(?![\\w-])");
+    private static final Pattern ROUNDED_SHADOW = Pattern.compile( // setting: look
+            "(?<![\\w-])(rounded(?:-(?:tl|tr|bl|br|ss|se|es|ee|[tblrse]))?|shadow)"
+            + "((?:-(?:none|2xs|xs|sm|md|lg|xl|[234]xl|full|inner))?)(?![\\w-])");
+
+    // The rows: "label:tooltip". "—" is the bare class (plain "rounded", "shadow").
+    private static final String[] SPACING_SCALE = ("0 px 0.5 1 1.5 2 2.5 3 3.5 4 5 6 7 8 9 10 11 12 14 16 20 24 28 32 36 "
+            + "40 44 48 52 56 60 64 72 80 96").split(" "); // tooltip worked out in spacingTip()
+    private static final String[] TEXT_SIZES = ("xs:12px sm:14px base:16px lg:18px xl:20px 2xl:24px 3xl:30px 4xl:36px "
+            + "5xl:48px 6xl:60px 7xl:72px 8xl:96px 9xl:128px").split(" ");
+    private static final String[] ROUNDED_V3 = "none:0 sm:2px —:4px md:6px lg:8px xl:12px 2xl:16px 3xl:24px full:round".split(" ");
+    private static final String[] ROUNDED_V4 = "none:0 xs:2px sm:4px md:6px lg:8px xl:12px 2xl:16px 3xl:24px 4xl:32px full:round".split(" ");
+    private static final String[] SHADOW_V3 = "none:none sm:small —:default md:medium lg:large xl:extra-large 2xl:huge inner:inside".split(" ");
+    private static final String[] SHADOW_V4 = "none:none 2xs:tiny xs:extra-small sm:small md:medium lg:large xl:extra-large 2xl:huge".split(" ");
+
+    // The size row open now, if any, so a second click (double-click) can close it.
+    private static JBPopup sizePopup;
+
     private static final int MAX_FILE_CHARS = 2_000_000; // skip huge files (minified bundles, dumps)
     private static final int SCAN_DELAY_MS = 300;
 
@@ -181,6 +220,11 @@ public class HexSwatchListener implements EditorFactoryListener {
         }, disposable);
 
         editor.addEditorMouseListener(new EditorMouseListener() {
+            @Override
+            public void mousePressed(@NotNull EditorMouseEvent e) {
+                closeSizeRow(); // any press closes the size row but still reaches the editor (double-click selects)
+            }
+
             @Override
             public void mouseClicked(@NotNull EditorMouseEvent e) {
                 onClick(editor, e);
@@ -431,7 +475,11 @@ public class HexSwatchListener implements EditorFactoryListener {
 
     private static void onClick(Editor editor, EditorMouseEvent e) {
         Inlay<?> inlay = e.getInlay();
-        if (inlay == null || !(inlay.getRenderer() instanceof Swatch swatch)) return;
+        if (inlay == null) {
+            onTextClick(editor, e); // maybe a Tailwind size class (4d)
+            return;
+        }
+        if (!(inlay.getRenderer() instanceof Swatch swatch)) return;
         e.consume(); // don't also move the caret
 
         int start = inlay.getOffset();
@@ -575,7 +623,7 @@ public class HexSwatchListener implements EditorFactoryListener {
             tips[i] = name + "-" + SHADES[i] + "  " + hexes[i];
         }
         // "hover:bg-red-600/50" -> "hover:bg-red-500/50": only the shade number (group 2) changes.
-        showRow(editor, start, click, SHADES, colors, tips, m.group(2),
+        showRow(editor, start, click, SHADES, colors, tips, m.group(2), true,
                 shade -> replaceGroup(editor, start, TW, 2, shade, "Change Tailwind Shade"));
         return true;
     }
@@ -590,21 +638,92 @@ public class HexSwatchListener implements EditorFactoryListener {
         // "text-white/80" -> "text-black/80": only the word (group 1) changes.
         showRow(editor, start, click, words, new Color[]{Color.WHITE, Color.BLACK},
                 new String[]{"white  #ffffff", "black  #000000"},
-                m.group(1), word -> replaceGroup(editor, start, TW_BW, 1, word, "Change Tailwind Colour"));
+                m.group(1), true, word -> replaceGroup(editor, start, TW_BW, 1, word, "Change Tailwind Colour"));
     }
 
-    // ---- Shared by 4b and 4c -------------------------------------------------------------------
+    // ---- 4d. Tailwind sizes: a plain click on p-4, w-8, text-sm... shows a row of sizes ----------
 
-    // A popup row of colour boxes with labels; the current one is outlined; a click calls onPick with its label.
-    private static void showRow(Editor editor, int start, MouseEvent click, String[] labels, Color[] colors,
-                                String[] tips, String current, Consumer<String> onPick) {
-        JPanel row = new JPanel(new GridLayout(1, labels.length, JBUI.scale(2), 0));
+    // Only when a size setting is on, and only for a plain single left click on text (not drag, Shift, double-click).
+    // Looks at the clicked line only, so the file size doesn't matter.
+    private static void onTextClick(Editor editor, EditorMouseEvent e) {
+        closeSizeRow();
+        MouseEvent click = e.getMouseEvent();
+        if (click.getClickCount() != 1 || click.getButton() != MouseEvent.BUTTON1 || click.isShiftDown()
+                || click.isControlDown() || click.isAltDown() || click.isMetaDown() || !e.isOverText()) return;
+        Settings s = Settings.get();
+        if (!s.spacing && !s.sizing && !s.look) return;
+
+        Document doc = editor.getDocument();
+        int offset = e.getOffset();
+        int line = doc.getLineNumber(offset);
+        int lineStart = doc.getLineStartOffset(line);
+        CharSequence lineText = doc.getImmutableCharSequence().subSequence(lineStart, doc.getLineEndOffset(line));
+
+        Pattern[] patterns = {SPACING, SIZING, TEXT_SIZE, ROUNDED_SHADOW};
+        boolean[] on = {s.spacing, s.sizing, s.look, s.look};
+        for (int i = 0; i < patterns.length; i++) {
+            if (!on[i]) continue;
+            Matcher m = patterns[i].matcher(lineText);
+            while (m.find()) {
+                if (m.start() <= offset - lineStart && offset - lineStart <= m.end()) {
+                    showSizes(editor, lineStart + m.start(), click, patterns[i], m.group(1), m.group(2));
+                    return;
+                }
+            }
+        }
+    }
+
+    // The row for one class. Picking a size rewrites only group 2: "hover:-mt-2" -> "hover:-mt-4".
+    private static void showSizes(Editor editor, int start, MouseEvent click, Pattern pattern, String prefix, String size) {
+        boolean v3 = tableFor(editor.getProject()) == V3;
+        String[] items = prefix.equals("text") ? TEXT_SIZES
+                : prefix.startsWith("rounded") ? (v3 ? ROUNDED_V3 : ROUNDED_V4)
+                : prefix.equals("shadow") ? (v3 ? SHADOW_V3 : SHADOW_V4)
+                : SPACING_SCALE;
+
+        String[] labels = new String[items.length];
+        String[] tips = new String[items.length];
+        for (int i = 0; i < items.length; i++) {
+            String[] parts = items[i].split(":");
+            labels[i] = parts[0];
+            String cls = prefix + (labels[i].equals("—") ? "" : "-" + labels[i]);
+            tips[i] = cls + "  " + (parts.length > 1 ? parts[1] : spacingTip(labels[i]));
+        }
+        String current = size.isEmpty() ? "—" : size.substring(1);
+        sizePopup = showRow(editor, start, click, labels, null, tips, current, false,
+                label -> replaceGroup(editor, start, pattern, 2, label.equals("—") ? "" : "-" + label, "Change Tailwind Size"));
+    }
+
+    private static void closeSizeRow() {
+        if (sizePopup != null) {
+            sizePopup.cancel();
+            sizePopup = null;
+        }
+    }
+
+    // "4" -> "16px", "0.5" -> "2px", "px" -> "1px". Tailwind's spacing unit is 0.25rem = 4px.
+    private static String spacingTip(String value) {
+        return value.equals("px") ? "1px" : trimZeros(String.format(Locale.ROOT, "%.1f", Float.parseFloat(value) * 4)) + "px";
+    }
+
+    // ---- Shared by 4b, 4c and 4d ---------------------------------------------------------------
+
+    // A popup row of boxes with labels; the current one is outlined; a click calls onPick with its label.
+    // colors null = text-only boxes (sizes). Long rows wrap at 18. takeFocus false = the editor keeps the keyboard
+    // and any key press closes the row, so the click that opened it still works as a normal click. It also doesn't
+    // close itself on an outside click (that would swallow the click and break double-click word selection):
+    // the editor's mousePressed closes it instead, and leaving the editor (focus lost) closes it too.
+    private static JBPopup showRow(Editor editor, int start, MouseEvent click, String[] labels, Color[] colors,
+                                   String[] tips, String current, boolean takeFocus, Consumer<String> onPick) {
+        int columns = Math.min(labels.length, 18);
+        int rows = (labels.length + columns - 1) / columns;
+        JPanel row = new JPanel(new GridLayout(rows, columns, JBUI.scale(2), JBUI.scale(2)));
         row.setBorder(JBUI.Borders.empty(6));
         JBPopup[] popup = new JBPopup[1]; // filled in below; the cells need it to close the popup
 
         for (int i = 0; i < labels.length; i++) {
             String label = labels[i];
-            ShadeCell cell = new ShadeCell(colors[i], label, label.equals(current));
+            ShadeCell cell = new ShadeCell(colors == null ? null : colors[i], label, label.equals(current));
             cell.setToolTipText(tips[i]);
             cell.addMouseListener(new MouseAdapter() {
                 @Override
@@ -618,10 +737,35 @@ public class HexSwatchListener implements EditorFactoryListener {
 
         popup[0] = JBPopupFactory.getInstance()
                 .createComponentPopupBuilder(row, null)
-                .setRequestFocus(true)
-                .setCancelOnClickOutside(true)
+                .setRequestFocus(takeFocus)
+                .setFocusable(takeFocus) // size row: clicking a size mustn't pull the keyboard out of the editor
+                .setCancelOnClickOutside(takeFocus)
                 .createPopup();
+        if (!takeFocus) {
+            JComponent content = editor.getContentComponent();
+            KeyAdapter closeOnKey = new KeyAdapter() {
+                @Override
+                public void keyPressed(KeyEvent ev) {
+                    popup[0].cancel();
+                }
+            };
+            FocusAdapter closeOnLeave = new FocusAdapter() {
+                @Override
+                public void focusLost(FocusEvent ev) {
+                    Component to = ev.getOppositeComponent();
+                    if (to != null && SwingUtilities.isDescendingFrom(to, row)) return; // clicked a size in the row
+                    popup[0].cancel();
+                }
+            };
+            content.addKeyListener(closeOnKey);
+            content.addFocusListener(closeOnLeave);
+            Disposer.register(popup[0], () -> { // removed when the row closes
+                content.removeKeyListener(closeOnKey);
+                content.removeFocusListener(closeOnLeave);
+            });
+        }
         popup[0].show(rowLocation(editor, start, click, popup[0].getContent().getPreferredSize().height));
+        return popup[0];
     }
 
     // Where the row goes: just under the clicked line if it fits on screen, otherwise just above it,
@@ -652,6 +796,7 @@ public class HexSwatchListener implements EditorFactoryListener {
     }
 
     // One choice in the popup: a colour box with its label ("600", "white") underneath; the current one is outlined.
+    // color null = a size: just the label ("4", "lg") in a box.
     static class ShadeCell extends JComponent {
         final Color color;
         final String shade;
@@ -662,7 +807,7 @@ public class HexSwatchListener implements EditorFactoryListener {
             this.shade = shade;
             this.current = current;
             int labelWidth = getFontMetrics(JBUI.Fonts.miniFont()).stringWidth(shade) + JBUI.scale(6);
-            setPreferredSize(new Dimension(Math.max(JBUI.scale(30), labelWidth), JBUI.scale(42)));
+            setPreferredSize(new Dimension(Math.max(JBUI.scale(30), labelWidth), JBUI.scale(color == null ? 24 : 42)));
             setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
         }
 
@@ -670,6 +815,17 @@ public class HexSwatchListener implements EditorFactoryListener {
         protected void paintComponent(Graphics g0) {
             Graphics2D g = (Graphics2D) g0;
             g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            if (color == null) { // size: label in an outlined box
+                int w = getWidth() - JBUI.scale(4), h = getHeight() - JBUI.scale(4), x = JBUI.scale(2);
+                g.setColor(current ? JBColor.foreground() : JBColor.GRAY);
+                g.setStroke(new BasicStroke(current ? JBUIScale.scale(2f) : 1f));
+                g.drawRoundRect(x, x, w, h, JBUI.scale(4), JBUI.scale(4));
+                g.setColor(JBColor.foreground());
+                g.setFont(JBUI.Fonts.miniFont());
+                FontMetrics fm = g.getFontMetrics();
+                g.drawString(shade, (getWidth() - fm.stringWidth(shade)) / 2, (getHeight() + fm.getAscent() - fm.getDescent()) / 2);
+                return;
+            }
             int box = getWidth() - JBUI.scale(4);
             int x = JBUI.scale(2);
             g.setColor(color);
@@ -741,6 +897,79 @@ public class HexSwatchListener implements EditorFactoryListener {
 
         private static int size(Inlay inlay) {
             return Math.max(8, (int) (inlay.getEditor().getLineHeight() * 0.65));
+        }
+    }
+
+    // ---- Settings: three checkboxes for the size rows, all off by default -----------------------
+    // Saved by the IDE in hexswatch.xml (options folder). Registered in plugin.xml as an applicationService
+    // (Settings) and an applicationConfigurable under Tools (SettingsPage).
+
+    @State(name = "HexSwatch", storages = @Storage("hexswatch.xml"))
+    public static class Settings implements PersistentStateComponent<Settings> {
+        public boolean spacing = false; // p, m, gap, space
+        public boolean sizing = false;  // w, h, size
+        public boolean look = false;    // text size, rounded, shadow
+
+        static Settings get() {
+            return ApplicationManager.getApplication().getService(Settings.class);
+        }
+
+        @Override
+        public Settings getState() {
+            return this;
+        }
+
+        @Override
+        public void loadState(@NotNull Settings saved) {
+            XmlSerializerUtil.copyBean(saved, this);
+        }
+    }
+
+    public static class SettingsPage implements Configurable {
+        private JCheckBox spacing, sizing, look;
+
+        @Override
+        public String getDisplayName() {
+            return "Hex Swatch";
+        }
+
+        @Override
+        public JComponent createComponent() {
+            spacing = new JCheckBox("Spacing: p, px, py, pt, pr, pb, pl, m, mx, my, mt, mr, mb, ml (and -m), gap, space-x/y");
+            sizing = new JCheckBox("Width and height: w, h, size, min-w, min-h, max-h");
+            look = new JCheckBox("Text size, rounded corners and shadows: text-sm, rounded-lg, shadow-md");
+            JPanel boxes = new JPanel();
+            boxes.setLayout(new BoxLayout(boxes, BoxLayout.Y_AXIS));
+            boxes.add(new JLabel("Tailwind size rows: click a class (like p-4) to get a row of its sizes. Any key closes the row."));
+            boxes.add(Box.createVerticalStrut(JBUI.scale(8)));
+            boxes.add(spacing);
+            boxes.add(sizing);
+            boxes.add(look);
+            JPanel page = new JPanel(new BorderLayout());
+            page.add(boxes, BorderLayout.NORTH); // keep the checkboxes at the top
+            return page;
+        }
+
+        @Override
+        public boolean isModified() {
+            Settings s = Settings.get();
+            return spacing.isSelected() != s.spacing || sizing.isSelected() != s.sizing || look.isSelected() != s.look;
+        }
+
+        @Override
+        public void apply() {
+            Settings s = Settings.get();
+            s.spacing = spacing.isSelected();
+            s.sizing = sizing.isSelected();
+            s.look = look.isSelected();
+        }
+
+        @Override
+        public void reset() {
+            Settings s = Settings.get();
+            spacing.setSelected(s.spacing);
+            sizing.setSelected(s.sizing);
+            look.setSelected(s.look);
         }
     }
 }
