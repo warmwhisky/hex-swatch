@@ -3,8 +3,10 @@
 //   - rgb()/rgba() (rgb(255, 0, 0), rgb(255 0 0 / 50%)) -> circle  -> same picker, written back in the same style
 //   - hsl()/hsla() (hsl(0 100% 50%)), oklch() (oklch(63.7% 0.237 25.331)) -> circle -> same picker, same style
 //   - Tailwind colour classes (hover:bg-red-600, /50)  -> diamond -> a row of that colour's shades (50-950),
-//     and under it every colour at that shade, to swap the colour name. Follows the project's Tailwind 3 or 4.
-//   - Tailwind white/black (text-white, bg-black/50)   -> diamond -> every colour at 500, plus white and black
+//     under it every colour at that shade, to swap the colour name, and a row of opacities (/5 to solid).
+//     Follows the project's Tailwind 3 or 4.
+//   - Tailwind white/black (text-white, bg-black/50)   -> diamond -> every colour at 500, plus white and black,
+//     and the opacity row
 //   - Tailwind sizes (p-4, -mt-2, w-8, text-sm, rounded-lg, shadow-md) -> no mark; a plain click on the class
 //     shows a row of its sizes. Off by default: Settings -> Tools -> Hex Swatch (Settings / SettingsPage below).
 //
@@ -65,6 +67,7 @@ import java.awt.event.MouseEvent;
 import java.awt.geom.Ellipse2D;
 import java.awt.geom.Path2D;
 import java.awt.geom.Rectangle2D;
+import java.awt.geom.RoundRectangle2D;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -89,6 +92,8 @@ public class HexSwatchListener implements EditorFactoryListener {
     //   V3: 22 colours copied from tailwindcss 3.4 (colors.js).
     //   V4: 26 colours from tailwindcss 4.3 (theme.css), OKLCH converted to hex. Adds mauve, olive, mist, taupe.
     private static final String[] SHADES = {"50", "100", "200", "300", "400", "500", "600", "700", "800", "900", "950"};
+    // The opacity row in the diamond popup (the /50 part). 100 = solid, written with no "/".
+    private static final String[] OPACITIES = {"5", "10", "20", "25", "30", "40", "50", "60", "70", "75", "80", "90", "95", "100"};
     private static final Map<String, String[]> V3 = new LinkedHashMap<>();
     private static final Map<String, String[]> V4 = new LinkedHashMap<>();
     static {
@@ -631,11 +636,14 @@ public class HexSwatchListener implements EditorFactoryListener {
         // or -> "bg-white/50" (colour and shade, groups 1 to 2, become the one word).
         JPanel colourRows = colourGrid(editor.getProject(), shade, name, popup, colour ->
                 replaceGroups(editor, start, TW, 1, isBlackOrWhite(colour) ? 2 : 1, colour, "Change Tailwind Colour"));
-        showPopup(editor, start, click, stack(shadeRow, colourRows), true, popup);
+        // Opacity row: "bg-red-500/50" -> "bg-red-500/30"; the "/<n>" goes after the shade (group 2), opacity is group 3.
+        JPanel opacityRow = opacityGrid(colors[shadeIndex(shade)], name + "-" + shade, m.group(3), popup,
+                o -> replaceOpacity(editor, start, TW, 2, 3, o));
+        showPopup(editor, start, click, stack(shadeRow, colourRows, opacityRow), true, popup);
         return true;
     }
 
-    // ---- 4c. Tailwind white/black: only the colour rows (no shades), at 500 --------------------
+    // ---- 4c. Tailwind white/black: the colour rows (no shades) at 500, and the opacity row -----
 
     private static void showBlackWhite(Editor editor, int start, MouseEvent click) {
         Matcher m = TW_BW.matcher(editor.getDocument().getImmutableCharSequence());
@@ -645,7 +653,23 @@ public class HexSwatchListener implements EditorFactoryListener {
         // "text-white/80" -> "text-black/80" or "text-red-500/80": the word (group 1) changes; a colour gets "-500".
         JPanel colourRows = colourGrid(editor.getProject(), "500", m.group(1), popup, colour ->
                 replaceGroup(editor, start, TW_BW, 1, isBlackOrWhite(colour) ? colour : colour + "-500", "Change Tailwind Colour"));
-        showPopup(editor, start, click, stack(colourRows), true, popup);
+        // Opacity row: "text-white/80" -> "text-white/50"; the "/<n>" goes after the word (group 1), opacity is group 2.
+        JPanel opacityRow = opacityGrid(blackOrWhite(m.group(1)), m.group(1), m.group(2), popup,
+                o -> replaceOpacity(editor, start, TW_BW, 1, 2, o));
+        showPopup(editor, start, click, stack(colourRows, opacityRow), true, popup);
+    }
+
+    // One colour at each of OPACITIES, drawn over a checkerboard. `name` is for the tooltip ("red-500/30").
+    // `current` is the class's opacity, null = solid (100 outlined).
+    private static JPanel opacityGrid(Color base, String name, String current, JBPopup[] popup, Consumer<String> onPick) {
+        Color[] colors = new Color[OPACITIES.length];
+        String[] tips = new String[OPACITIES.length];
+        for (int i = 0; i < OPACITIES.length; i++) {
+            boolean solid = OPACITIES[i].equals("100");
+            colors[i] = withOpacity(base, solid ? null : OPACITIES[i]);
+            tips[i] = solid ? name + "  solid" : name + "/" + OPACITIES[i];
+        }
+        return grid(OPACITIES, colors, tips, current == null ? "100" : current, OPACITIES.length, true, popup, onPick);
     }
 
     // Every colour of this project's Tailwind at one shade, then white and black, in two rows of small
@@ -862,6 +886,21 @@ public class HexSwatchListener implements EditorFactoryListener {
                 .run(() -> doc.replaceString(m.start(first), m.end(last), text));
     }
 
+    // Set the "/<n>" part: replaced if there is one, added after group `before` if not, removed for "100".
+    // "bg-red-500" + 30 -> "bg-red-500/30"; "bg-red-500/50" + 100 -> "bg-red-500".
+    private static void replaceOpacity(Editor editor, int start, Pattern pattern, int before, int opacity, String value) {
+        Document doc = editor.getDocument();
+        Matcher m = pattern.matcher(doc.getImmutableCharSequence());
+        if (!m.find(start) || m.start() != start) return; // text moved or was edited meanwhile
+
+        int from = m.end(before);
+        int to = m.group(opacity) == null ? from : m.end(opacity);
+        WriteCommandAction.writeCommandAction(editor.getProject())
+                .withName("Change Tailwind Opacity")
+                .withGroupId("hexswatch-" + start)
+                .run(() -> doc.replaceString(from, to, value.equals("100") ? "" : "/" + value));
+    }
+
     // One choice in the popup: a colour box with its label ("600", "white") underneath; the current one is outlined.
     // color null = a size: just the label ("4", "lg") in a box. showLabel false = a smaller colour box, no label
     // (the colour rows; the name is in the tooltip).
@@ -899,6 +938,18 @@ public class HexSwatchListener implements EditorFactoryListener {
             }
             int box = getWidth() - JBUI.scale(4);
             int x = JBUI.scale(2);
+            if (color.getAlpha() < 255) { // see-through (opacity row): a white/grey checkerboard shows through
+                Shape oldClip = g.getClip();
+                g.clip(new RoundRectangle2D.Float(x, x, box, box, JBUI.scale(4), JBUI.scale(4)));
+                int sq = JBUI.scale(4);
+                for (int row = 0; row * sq < box; row++) {
+                    for (int col = 0; col * sq < box; col++) {
+                        g.setColor((row + col) % 2 == 0 ? Color.WHITE : new Color(0xCCCCCC));
+                        g.fillRect(x + col * sq, x + row * sq, sq, sq);
+                    }
+                }
+                g.setClip(oldClip);
+            }
             g.setColor(color);
             g.fillRoundRect(x, x, box, box, JBUI.scale(4), JBUI.scale(4));
             g.setColor(current ? JBColor.foreground() : JBColor.GRAY);
