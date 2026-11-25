@@ -1,6 +1,8 @@
 # Changelog
 
 ## 2026-11-25
+- 11:30 1.10.0 tried by Ben; plan moved to done (Marketplace later)
+- 11:26 Font weight row; version 1.10.0 (code built, not released)
 - 11:13 1.9.0 tried by Ben; plan moved to done (Marketplace later)
 - 10:07 Swap is Alt+click on the circle; the strip and its Escape fix removed
 - 09:48 One Escape closes picker and strip; build finds PhpStorm under any folder name

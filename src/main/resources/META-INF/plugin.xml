@@ -27,7 +27,7 @@
       <code>≈ blue-600</code> nearest). Alt+click the circle in a class like <code>bg-[#3b82f6]</code> to swap it for
       <code>bg-blue-500</code>.</li>
   <li><b>Tailwind sizes</b> (off by default): click a size class like <code>p-4</code>, <code>-mt-2</code>, <code>w-12</code>,
-      <code>text-lg</code>, <code>rounded-md</code> or <code>shadow-sm</code> for a row of sizes. Only the size changes.
+      <code>text-lg</code>, <code>font-bold</code>, <code>rounded-md</code> or <code>shadow-sm</code> for a row of sizes. Only the size changes.
       Turn it on in Settings → Tools → Hex Swatch.</li>
 </ul>
 <p>Notes:</p>
@@ -41,6 +41,10 @@
 ]]></description>
 
     <change-notes><![CDATA[
+<h3>1.10.0</h3>
+<ul>
+  <li>New: click a font weight class like <code>font-semibold</code> for a row of weights; pick one and only the weight changes (<code>md:font-medium</code> → <code>md:font-bold</code>). Part of the "Text size and weight" checkbox in Settings → Tools → Hex Swatch (off by default).</li>
+</ul>
 <h3>1.9.0</h3>
 <ul>
   <li>New, in Tailwind projects: hover a circle to see the nearest Tailwind colour (<code>= blue-500</code> exact, <code>≈ blue-600</code> nearest).</li>

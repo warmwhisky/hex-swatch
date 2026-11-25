@@ -9,7 +9,7 @@
 //     and the opacity row
 //   - In Tailwind projects, hovering a circle names the nearest Tailwind colour ("= blue-500"), and Alt+click on one
 //     inside a class (bg-[#3b82f6]) swaps it for the class (bg-blue-500). See 4e.
-//   - Tailwind sizes (p-4, -mt-2, w-8, text-sm, rounded-lg, shadow-md) -> no mark; a plain click on the class
+//   - Tailwind sizes (p-4, -mt-2, w-8, text-sm, font-bold, rounded-lg, shadow-md) -> no mark; a plain click on the class
 //     shows a row of its sizes. Off by default: Settings -> Tools -> Hex Swatch (Settings / SettingsPage below).
 //
 // Loaded by: META-INF/plugin.xml (<editorFactoryListener>). PhpStorm calls editorCreated() for every editor it opens.
@@ -188,6 +188,8 @@ public class HexSwatchListener implements EditorFactoryListener {
             "(?<![\\w-])(w|h|size|min-w|min-h|max-h)(-" + SPACE_VALUE + ")(?![\\w./-])");
     private static final Pattern TEXT_SIZE = Pattern.compile( // setting: look ("text-sm/6" keeps its /6)
             "(?<![\\w-])(text)(-(?:xs|sm|base|lg|xl|[2-9]xl))(?![\\w-])");
+    private static final Pattern FONT_WEIGHT = Pattern.compile( // setting: look (not font-sans/font-mono: no scale)
+            "(?<![\\w-])(font)(-(?:thin|extralight|light|normal|medium|semibold|bold|extrabold|black))(?![\\w-])");
     private static final Pattern ROUNDED_SHADOW = Pattern.compile( // setting: look
             "(?<![\\w-])(rounded(?:-(?:tl|tr|bl|br|ss|se|es|ee|[tblrse]))?|shadow)"
             + "((?:-(?:none|2xs|xs|sm|md|lg|xl|[234]xl|full|inner))?)(?![\\w-])");
@@ -197,6 +199,13 @@ public class HexSwatchListener implements EditorFactoryListener {
             + "40 44 48 52 56 60 64 72 80 96").split(" "); // tooltip worked out in spacingTip()
     private static final String[] TEXT_SIZES = ("xs:12px sm:14px base:16px lg:18px xl:20px 2xl:24px 3xl:30px 4xl:36px "
             + "5xl:48px 6xl:60px 7xl:72px 8xl:96px 9xl:128px").split(" ");
+    private static final String[] WEIGHTS = ("thin:100 extralight:200 light:300 normal:400 medium:500 semibold:600 "
+            + "bold:700 extrabold:800 black:900").split(" ");
+    // The font that draws "Aa" at each weight: JetBrains Mono comes with the IDE, one family per weight, but has no black.
+    private static final Map<String, String> WEIGHT_FONTS = Map.of("thin", "JetBrains Mono Thin",
+            "extralight", "JetBrains Mono ExtraLight", "light", "JetBrains Mono Light", "normal", "JetBrains Mono",
+            "medium", "JetBrains Mono Medium", "semibold", "JetBrains Mono SemiBold", "bold", "JetBrains Mono",
+            "extrabold", "JetBrains Mono ExtraBold");
     private static final String[] ROUNDED_V3 = "none:0 sm:2px —:4px md:6px lg:8px xl:12px 2xl:16px 3xl:24px full:round".split(" ");
     private static final String[] ROUNDED_V4 = "none:0 xs:2px sm:4px md:6px lg:8px xl:12px 2xl:16px 3xl:24px 4xl:32px full:round".split(" ");
     private static final String[] SHADOW_V3 = "none:none sm:small —:default md:medium lg:large xl:extra-large 2xl:huge inner:inside".split(" ");
@@ -788,8 +797,8 @@ public class HexSwatchListener implements EditorFactoryListener {
         int lineStart = doc.getLineStartOffset(line);
         CharSequence lineText = doc.getImmutableCharSequence().subSequence(lineStart, doc.getLineEndOffset(line));
 
-        Pattern[] patterns = {SPACING, SIZING, TEXT_SIZE, ROUNDED_SHADOW};
-        boolean[] on = {s.spacing, s.sizing, s.look, s.look};
+        Pattern[] patterns = {SPACING, SIZING, TEXT_SIZE, FONT_WEIGHT, ROUNDED_SHADOW};
+        boolean[] on = {s.spacing, s.sizing, s.look, s.look, s.look};
         for (int i = 0; i < patterns.length; i++) {
             if (!on[i]) continue;
             Matcher m = patterns[i].matcher(lineText);
@@ -806,6 +815,7 @@ public class HexSwatchListener implements EditorFactoryListener {
     private static void showSizes(Editor editor, int start, MouseEvent click, Pattern pattern, String prefix, String size) {
         boolean v3 = tableFor(editor.getProject()) == V3;
         String[] items = prefix.equals("text") ? TEXT_SIZES
+                : prefix.equals("font") ? WEIGHTS
                 : prefix.startsWith("rounded") ? (v3 ? ROUNDED_V3 : ROUNDED_V4)
                 : prefix.equals("shadow") ? (v3 ? SHADOW_V3 : SHADOW_V4)
                 : SPACING_SCALE;
@@ -821,6 +831,15 @@ public class HexSwatchListener implements EditorFactoryListener {
         String current = size.isEmpty() ? "—" : size.substring(1);
         sizePopup = showRow(editor, start, click, labels, null, tips, current, false,
                 label -> replaceGroup(editor, start, pattern, 2, label.equals("—") ? "" : "-" + label, "Change Tailwind Size"));
+    }
+
+    // "semibold" -> the font to draw "Aa" in. Null if the label isn't a weight or the font isn't there (Java then gives
+    // its "Dialog" font): the box shows the label instead.
+    private static Font weightFont(String label) {
+        String family = WEIGHT_FONTS.get(label);
+        if (family == null) return null;
+        Font font = new Font(family, label.equals("bold") ? Font.BOLD : Font.PLAIN, JBUI.scale(15));
+        return font.getFamily(Locale.ROOT).equals(Font.DIALOG) ? null : font;
     }
 
     private static void closeSizeRow() {
@@ -1058,20 +1077,22 @@ public class HexSwatchListener implements EditorFactoryListener {
     }
 
     // One choice in the popup: a colour box with its label ("600", "white") underneath; the current one is outlined.
-    // color null = a size: just the label ("4", "lg") in a box. showLabel false = a smaller colour box, no label
+    // color null = a size: just the label ("4", "lg") in a box, or "Aa" for a font weight. showLabel false = a smaller colour box, no label
     // (the colour rows; the name is in the tooltip).
     static class ShadeCell extends JComponent {
         final Color color;
         final String shade;
         final boolean current;
         final boolean showLabel;
+        final Font weight; // font weights only: draws "Aa" in this instead of the label
 
         ShadeCell(Color color, String shade, boolean current, boolean showLabel) {
             this.color = color;
             this.shade = shade;
             this.current = current;
             this.showLabel = showLabel;
-            int labelWidth = getFontMetrics(JBUI.Fonts.miniFont()).stringWidth(shade) + JBUI.scale(6);
+            this.weight = color == null ? weightFont(shade) : null;
+            int labelWidth = weight != null ? 0 : getFontMetrics(JBUI.Fonts.miniFont()).stringWidth(shade) + JBUI.scale(6);
             setPreferredSize(!showLabel ? new Dimension(JBUI.scale(24), JBUI.scale(24))
                     : new Dimension(Math.max(JBUI.scale(30), labelWidth), JBUI.scale(color == null ? 24 : 42)));
             setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
@@ -1087,9 +1108,13 @@ public class HexSwatchListener implements EditorFactoryListener {
                 g.setStroke(new BasicStroke(current ? JBUIScale.scale(2f) : 1f));
                 g.drawRoundRect(x, x, w, h, JBUI.scale(4), JBUI.scale(4));
                 g.setColor(JBColor.foreground());
-                g.setFont(JBUI.Fonts.miniFont());
+                g.setFont(weight == null ? JBUI.Fonts.miniFont() : weight);
+                if (weight != null) { // smooth edges, or the thin weights look alike
+                    g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+                }
+                String text = weight == null ? shade : "Aa";
                 FontMetrics fm = g.getFontMetrics();
-                g.drawString(shade, (getWidth() - fm.stringWidth(shade)) / 2, (getHeight() + fm.getAscent() - fm.getDescent()) / 2);
+                g.drawString(text, (getWidth() - fm.stringWidth(text)) / 2, (getHeight() + fm.getAscent() - fm.getDescent()) / 2);
                 return;
             }
             int box = getWidth() - JBUI.scale(4);
@@ -1187,7 +1212,7 @@ public class HexSwatchListener implements EditorFactoryListener {
     public static class Settings implements PersistentStateComponent<Settings> {
         public boolean spacing = false; // p, m, gap, space
         public boolean sizing = false;  // w, h, size
-        public boolean look = false;    // text size, rounded, shadow
+        public boolean look = false;    // text size, font weight, rounded, shadow
 
         static Settings get() {
             return ApplicationManager.getApplication().getService(Settings.class);
@@ -1216,7 +1241,7 @@ public class HexSwatchListener implements EditorFactoryListener {
         public JComponent createComponent() {
             spacing = new JCheckBox("Spacing: p, px, py, pt, pr, pb, pl, m, mx, my, mt, mr, mb, ml (and -m), gap, space-x/y");
             sizing = new JCheckBox("Width and height: w, h, size, min-w, min-h, max-h");
-            look = new JCheckBox("Text size, rounded corners and shadows: text-sm, rounded-lg, shadow-md");
+            look = new JCheckBox("Text size and weight, rounded corners and shadows: text-sm, font-bold, rounded-lg, shadow-md");
             JPanel boxes = new JPanel();
             boxes.setLayout(new BoxLayout(boxes, BoxLayout.Y_AXIS));
             boxes.add(new JLabel("Tailwind size rows: click a class (like p-4) to get a row of its sizes. Any key closes the row."));
