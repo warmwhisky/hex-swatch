@@ -9,7 +9,7 @@
 //     and the opacity row
 //   - In Tailwind projects, hovering a circle names the nearest Tailwind colour ("= blue-500"), and Alt+click on one
 //     inside a class (bg-[#3b82f6]) swaps it for the class (bg-blue-500). See 4e.
-//   - Tailwind sizes (p-4, -mt-2, w-8, text-sm, font-bold, rounded-lg, shadow-md) -> no mark; a plain click on the class
+//   - Tailwind sizes (p-4, -mt-2, w-8, text-sm, font-bold, rounded-lg, shadow-md, grid-cols-3, z-10) -> no mark; a plain click on the class
 //     shows a row of its sizes. Off by default: Settings -> Tools -> Hex Swatch (Settings / SettingsPage below).
 //
 // Loaded by: META-INF/plugin.xml (<editorFactoryListener>). PhpStorm calls editorCreated() for every editor it opens.
@@ -194,9 +194,17 @@ public class HexSwatchListener implements EditorFactoryListener {
             "(?<![\\w-])(rounded(?:-(?:tl|tr|bl|br|ss|se|es|ee|[tblrse]))?|shadow)"
             + "((?:-(?:none|2xs|xs|sm|md|lg|xl|[234]xl|full|inner))?)(?![\\w-])");
 
+    private static final Pattern GRID = Pattern.compile( // setting: grid (not col-start/col-end, grid-cols-[...])
+            "(?<![\\w-])(grid-(?:cols|rows)(?=-(?:\\d|none))|(?:col|row)-span(?=-(?:\\d|full))|z(?=-(?:\\d|auto))|-z(?=-\\d))"
+            + "(-(?:\\d+|none|full|auto))(?![\\w./-])");
+
     // The rows: "label:tooltip". "—" is the bare class (plain "rounded", "shadow").
     private static final String[] SPACING_SCALE = ("0 px 0.5 1 1.5 2 2.5 3 3.5 4 5 6 7 8 9 10 11 12 14 16 20 24 28 32 36 "
             + "40 44 48 52 56 60 64 72 80 96").split(" "); // tooltip worked out in spacingTip()
+    private static final String[] GRID_SCALE = "1 2 3 4 5 6 7 8 9 10 11 12 none".split(" "); // tooltips: gridTip()
+    private static final String[] SPAN_SCALE = "1 2 3 4 5 6 7 8 9 10 11 12 full".split(" ");
+    private static final String[] Z_SCALE = "0 10 20 30 40 50 auto".split(" ");
+    private static final String[] Z_MINUS_SCALE = "10 20 30 40 50".split(" "); // -z-10: no -z-0 or -z-auto
     private static final String[] TEXT_SIZES = ("xs:12px sm:14px base:16px lg:18px xl:20px 2xl:24px 3xl:30px 4xl:36px "
             + "5xl:48px 6xl:60px 7xl:72px 8xl:96px 9xl:128px").split(" ");
     private static final String[] WEIGHTS = ("thin:100 extralight:200 light:300 normal:400 medium:500 semibold:600 "
@@ -789,7 +797,7 @@ public class HexSwatchListener implements EditorFactoryListener {
         if (click.getClickCount() != 1 || click.getButton() != MouseEvent.BUTTON1 || click.isShiftDown()
                 || click.isControlDown() || click.isAltDown() || click.isMetaDown() || !e.isOverText()) return;
         Settings s = Settings.get();
-        if (!s.spacing && !s.sizing && !s.look) return;
+        if (!s.spacing && !s.sizing && !s.look && !s.grid) return;
 
         Document doc = editor.getDocument();
         int offset = e.getOffset();
@@ -797,8 +805,8 @@ public class HexSwatchListener implements EditorFactoryListener {
         int lineStart = doc.getLineStartOffset(line);
         CharSequence lineText = doc.getImmutableCharSequence().subSequence(lineStart, doc.getLineEndOffset(line));
 
-        Pattern[] patterns = {SPACING, SIZING, TEXT_SIZE, FONT_WEIGHT, ROUNDED_SHADOW};
-        boolean[] on = {s.spacing, s.sizing, s.look, s.look, s.look};
+        Pattern[] patterns = {SPACING, SIZING, TEXT_SIZE, FONT_WEIGHT, ROUNDED_SHADOW, GRID};
+        boolean[] on = {s.spacing, s.sizing, s.look, s.look, s.look, s.grid};
         for (int i = 0; i < patterns.length; i++) {
             if (!on[i]) continue;
             Matcher m = patterns[i].matcher(lineText);
@@ -818,7 +826,12 @@ public class HexSwatchListener implements EditorFactoryListener {
                 : prefix.equals("font") ? WEIGHTS
                 : prefix.startsWith("rounded") ? (v3 ? ROUNDED_V3 : ROUNDED_V4)
                 : prefix.equals("shadow") ? (v3 ? SHADOW_V3 : SHADOW_V4)
+                : prefix.startsWith("grid-") ? GRID_SCALE
+                : prefix.endsWith("-span") ? SPAN_SCALE
+                : prefix.equals("z") ? Z_SCALE
+                : prefix.equals("-z") ? Z_MINUS_SCALE
                 : SPACING_SCALE;
+        boolean grid = pattern == GRID;
 
         String[] labels = new String[items.length];
         String[] tips = new String[items.length];
@@ -826,7 +839,7 @@ public class HexSwatchListener implements EditorFactoryListener {
             String[] parts = items[i].split(":");
             labels[i] = parts[0];
             String cls = prefix + (labels[i].equals("—") ? "" : "-" + labels[i]);
-            tips[i] = cls + "  " + (parts.length > 1 ? parts[1] : spacingTip(labels[i]));
+            tips[i] = cls + "  " + (parts.length > 1 ? parts[1] : grid ? gridTip(prefix, labels[i]) : spacingTip(labels[i]));
         }
         String current = size.isEmpty() ? "—" : size.substring(1);
         sizePopup = showRow(editor, start, click, labels, null, tips, current, false,
@@ -847,6 +860,18 @@ public class HexSwatchListener implements EditorFactoryListener {
             sizePopup.cancel();
             sizePopup = null;
         }
+    }
+
+    // ("grid-cols", "4") -> "4 equal columns", ("col-span", "2") -> "2 columns wide", ("-z", "10") -> "z-index -10".
+    private static String gridTip(String prefix, String value) {
+        if (prefix.endsWith("z")) return "z-index " + (prefix.startsWith("-") ? "-" : "") + value;
+        String s = value.equals("1") ? "" : "s";
+        return switch (prefix) {
+            case "grid-cols" -> value.equals("none") ? "no set columns" : value + " equal column" + s;
+            case "grid-rows" -> value.equals("none") ? "no set rows" : value + " equal row" + s;
+            case "col-span" -> value.equals("full") ? "all columns" : value + " column" + s + " wide";
+            default -> value.equals("full") ? "all rows" : value + " row" + s + " high"; // row-span
+        };
     }
 
     // "4" -> "16px", "0.5" -> "2px", "px" -> "1px". Tailwind's spacing unit is 0.25rem = 4px.
@@ -1204,7 +1229,7 @@ public class HexSwatchListener implements EditorFactoryListener {
         }
     }
 
-    // ---- Settings: three checkboxes for the size rows, all off by default -----------------------
+    // ---- Settings: four checkboxes for the size rows, all off by default -----------------------
     // Saved by the IDE in hexswatch.xml (options folder). Registered in plugin.xml as an applicationService
     // (Settings) and an applicationConfigurable under Tools (SettingsPage).
 
@@ -1213,6 +1238,7 @@ public class HexSwatchListener implements EditorFactoryListener {
         public boolean spacing = false; // p, m, gap, space
         public boolean sizing = false;  // w, h, size
         public boolean look = false;    // text size, font weight, rounded, shadow
+        public boolean grid = false;    // grid columns/rows, spans, z-index
 
         static Settings get() {
             return ApplicationManager.getApplication().getService(Settings.class);
@@ -1230,7 +1256,7 @@ public class HexSwatchListener implements EditorFactoryListener {
     }
 
     public static class SettingsPage implements Configurable {
-        private JCheckBox spacing, sizing, look;
+        private JCheckBox spacing, sizing, look, grid;
 
         @Override
         public String getDisplayName() {
@@ -1242,6 +1268,7 @@ public class HexSwatchListener implements EditorFactoryListener {
             spacing = new JCheckBox("Spacing: p, px, py, pt, pr, pb, pl, m, mx, my, mt, mr, mb, ml (and -m), gap, space-x/y");
             sizing = new JCheckBox("Width and height: w, h, size, min-w, min-h, max-h");
             look = new JCheckBox("Text size and weight, rounded corners and shadows: text-sm, font-bold, rounded-lg, shadow-md");
+            grid = new JCheckBox("Grid and z-index: grid-cols, grid-rows, col-span, row-span, z (and -z)");
             JPanel boxes = new JPanel();
             boxes.setLayout(new BoxLayout(boxes, BoxLayout.Y_AXIS));
             boxes.add(new JLabel("Tailwind size rows: click a class (like p-4) to get a row of its sizes. Any key closes the row."));
@@ -1249,6 +1276,7 @@ public class HexSwatchListener implements EditorFactoryListener {
             boxes.add(spacing);
             boxes.add(sizing);
             boxes.add(look);
+            boxes.add(grid);
             JPanel page = new JPanel(new BorderLayout());
             page.add(boxes, BorderLayout.NORTH); // keep the checkboxes at the top
             return page;
@@ -1257,7 +1285,8 @@ public class HexSwatchListener implements EditorFactoryListener {
         @Override
         public boolean isModified() {
             Settings s = Settings.get();
-            return spacing.isSelected() != s.spacing || sizing.isSelected() != s.sizing || look.isSelected() != s.look;
+            return spacing.isSelected() != s.spacing || sizing.isSelected() != s.sizing || look.isSelected() != s.look
+                    || grid.isSelected() != s.grid;
         }
 
         @Override
@@ -1266,6 +1295,7 @@ public class HexSwatchListener implements EditorFactoryListener {
             s.spacing = spacing.isSelected();
             s.sizing = sizing.isSelected();
             s.look = look.isSelected();
+            s.grid = grid.isSelected();
         }
 
         @Override
@@ -1274,6 +1304,7 @@ public class HexSwatchListener implements EditorFactoryListener {
             spacing.setSelected(s.spacing);
             sizing.setSelected(s.sizing);
             look.setSelected(s.look);
+            grid.setSelected(s.grid);
         }
     }
 }

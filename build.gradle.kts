@@ -10,7 +10,7 @@ plugins {
 }
 
 group = "org.gtdb"
-version = "1.10.0"
+version = "1.11.0"
 
 repositories {
     mavenCentral()

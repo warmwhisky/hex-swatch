@@ -23,7 +23,8 @@ before every colour in **any** file, including places the IDE's own swatches mis
 - **Tailwind sizes** (off by default): click a size class like `p-4`, `-mt-2`, `w-12`, `text-lg`, `font-bold`, `rounded-md` or
   `shadow-sm` for a row of sizes; only the size changes (`hover:px-4` → `hover:px-6`). No marks, and any key closes
   the row. Turn it on in Settings → Tools → Hex Swatch: spacing (`p m gap space`), width/height
-  (`w h size min-w min-h max-h`), text size/weight/rounded/shadow. Not covered: `w-full`, `w-1/2`, `p-[3px]`, `max-w-*`.
+  (`w h size min-w min-h max-h`), text size/weight/rounded/shadow, grid and z-index
+  (`grid-cols grid-rows col-span row-span z`). Not covered: `w-full`, `w-1/2`, `p-[3px]`, `max-w-*`.
 
 It reads the plain text, so it works in CSS, Blade, HTML, JS, PHP, Vue, Markdown and anything else.
 It changes no IDE settings.

@@ -1,6 +1,6 @@
 # Tailwind grid and z-index rows
 
-**Status:** 📝 Planned, not started.
+**Status:** ✅ Done, 1.11.0 (Marketplace later).
 
 More size rows for small fixed scales people tweak all the time: grid columns/rows, spans and z-index.
 Only the number changes (`lg:grid-cols-3` → `lg:grid-cols-4`).
@@ -14,6 +14,6 @@ Only the number changes (`lg:grid-cols-3` → `lg:grid-cols-4`).
 - Not covered: `grid-cols-[...]`, `col-start-*`/`col-end-*`
 
 ## Steps
-- [ ] Patterns and rows; settings checkbox
-- [ ] Ben tries it
-- [ ] README, description, change notes, version bump
+- [x] Patterns and rows; settings checkbox
+- [x] Ben tries it
+- [x] README, description, change notes, version bump
