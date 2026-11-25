@@ -23,6 +23,9 @@
       (<code>bg-red-500</code> → <code>bg-red-500/30</code>; 100 makes it solid again).</li>
   <li><b>Tailwind white and black</b> (<code>text-white</code>, <code>bg-black/50</code>) also get a <b>diamond</b>.
       Click it for every colour at 500, plus white and black, and the opacity row.</li>
+  <li><b>Nearest Tailwind colour</b> (Tailwind projects): hover a circle to see it (<code>= blue-500</code> exact,
+      <code>≈ blue-600</code> nearest). Alt+click the circle in a class like <code>bg-[#3b82f6]</code> to swap it for
+      <code>bg-blue-500</code>.</li>
   <li><b>Tailwind sizes</b> (off by default): click a size class like <code>p-4</code>, <code>-mt-2</code>, <code>w-12</code>,
       <code>text-lg</code>, <code>rounded-md</code> or <code>shadow-sm</code> for a row of sizes. Only the size changes.
       Turn it on in Settings → Tools → Hex Swatch.</li>
@@ -38,6 +41,11 @@
 ]]></description>
 
     <change-notes><![CDATA[
+<h3>1.9.0</h3>
+<ul>
+  <li>New, in Tailwind projects: hover a circle to see the nearest Tailwind colour (<code>= blue-500</code> exact, <code>≈ blue-600</code> nearest).</li>
+  <li>Alt+click the circle in a class like <code>bg-[#3b82f6]</code> to swap it for <code>bg-blue-500</code>. Variants and <code>/50</code> opacity are kept. Also for rgb(), hsl() and oklch() in brackets.</li>
+</ul>
 <h3>1.8.0</h3>
 <ul>
   <li>New: an opacity row at the bottom of the Tailwind diamond popup (5 to 100, over a checkerboard). Pick one and only the <code>/50</code> part changes; 100 removes it (<code>bg-red-500/50</code> → <code>bg-red-500</code>).</li>

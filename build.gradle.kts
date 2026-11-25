@@ -10,7 +10,7 @@ plugins {
 }
 
 group = "org.gtdb"
-version = "1.8.0"
+version = "1.9.0"
 
 repositories {
     mavenCentral()
@@ -39,9 +39,12 @@ intellijPlatform {
         ides {
             create(IntelliJPlatformType.PhpStorm, "2023.3.8")
             create(IntelliJPlatformType.PhpStorm, "2025.1")
-            // Also the PhpStorm installed on this Windows machine, if there is one (Toolbox-free install path).
-            val installed = file("${System.getenv("LOCALAPPDATA") ?: ""}/Programs/PhpStorm")
-            if (installed.exists()) local(installed)
+            // Also the newest PhpStorm installed on this Windows machine, if there is one. The folder name differs per
+            // machine (Toolbox makes "PhpStorm", "PhpStorm 2"...).
+            file("${System.getenv("LOCALAPPDATA") ?: ""}/Programs")
+                .listFiles { f -> f.name.startsWith("PhpStorm") && File(f, "product-info.json").exists() }
+                ?.maxByOrNull { File(it, "product-info.json").lastModified() }
+                ?.let { local(it) }
         }
     }
 }

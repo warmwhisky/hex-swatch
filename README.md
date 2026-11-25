@@ -17,6 +17,9 @@ before every colour in **any** file, including places the IDE's own swatches mis
   `text-white`, `bg-black/50` and the like get a diamond too: click it for every colour at 500, plus white and black,
   and the opacity row.
   Colours follow the project's Tailwind version (3 or 4, read from `node_modules` or `package.json`).
+- **Nearest Tailwind colour** (Tailwind projects): hover a circle to see it (`= blue-500` exact, `≈ blue-600` nearest).
+  Alt+click the circle in a class like `hover:bg-[#3b82f6]/50` to swap it: `hover:bg-blue-500/50`.
+  Also for rgb(), hsl() and oklch() in brackets. Plain CSS gets the tooltip only.
 - **Tailwind sizes** (off by default): click a size class like `p-4`, `-mt-2`, `w-12`, `text-lg`, `rounded-md` or
   `shadow-sm` for a row of sizes; only the size changes (`hover:px-4` → `hover:px-6`). No marks, and any key closes
   the row. Turn it on in Settings → Tools → Hex Swatch: spacing (`p m gap space`), width/height

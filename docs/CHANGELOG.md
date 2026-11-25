@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-11-25
+- 11:13 1.9.0 tried by Ben; plan moved to done (Marketplace later)
+- 10:07 Swap is Alt+click on the circle; the strip and its Escape fix removed
+- 09:48 One Escape closes picker and strip; build finds PhpStorm under any folder name
+- 09:34 Nearest Tailwind colour: tooltip and swap strip; version 1.9.0 (code built, not released)
+- 09:30 1.8.0 zip rebuilt and verified
+
 ## 2026-11-24
 - 19:17 1.8.0 committed and pushed (Marketplace later); one version per feature again
 - 19:16 Opacity row done: 1.8.0 change notes, description, README. Versions now collect features until Ben publishes

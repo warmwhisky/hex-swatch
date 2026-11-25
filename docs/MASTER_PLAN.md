@@ -8,5 +8,5 @@
 | 4 | [Tailwind opacity row](plans/done/tailwind-opacity.md) | ✅ 1.8.0 on GitHub, Marketplace pending |
 | 5 | [Tailwind font weight row](plans/tailwind-font-weight.md) | 📝 Planned |
 | 6 | [Tailwind grid and z-index rows](plans/tailwind-grid-z.md) | 📝 Planned |
-| 7 | [Nearest Tailwind colour](plans/nearest-tailwind-colour.md) | 📝 Planned: ❓ how to offer the swap |
+| 7 | [Nearest Tailwind colour](plans/done/nearest-tailwind-colour.md) | 🔨 Built as 1.9.0, waiting for Ben to try it |
 | 8 | [Readable shades](plans/readable-shades.md) | 📝 Planned: ❓ large-text level too? |

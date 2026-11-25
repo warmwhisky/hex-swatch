@@ -11,7 +11,8 @@ Ben's general rules load from `~/.claude/CLAUDE.md`. This file is only what's sp
 - **Compatibility:** compiles against IntelliJ IDEA Community 2023.3.8, Java 17 (`sinceBuild 233`). Only use APIs that
   exist there; `verifyPlugin` checks PhpStorm 2023.3, 2025.1 and the installed one.
 - **Build on Ben's machine** with PhpStorm's own Java (foojay downloads Java 17 for compiling):
-  `$env:JAVA_HOME = "$env:LOCALAPPDATA\Programs\PhpStorm\jbr"; .\gradlew.bat buildPlugin verifyPlugin`.
+  `$env:JAVA_HOME = (Get-Item "$env:LOCALAPPDATA\Programs\PhpStorm*\jbr" | Select-Object -Last 1).FullName; .\gradlew.bat buildPlugin verifyPlugin`.
+  The folder differs per machine: `PhpStorm` at home, `PhpStorm 2` on the work PC (JetBrains Toolbox).
   That Java has `javac` but no `javap`; check API signatures with a small reflection script against `PhpStorm\lib\*`.
 - Tailwind tables: V3 from tailwindcss 3.4 `colors.js`; V4 from tailwindcss 4.x `theme.css` (OKLCH → hex via a node
   script). Project picks by `node_modules/tailwindcss/package.json` version, else `package.json`, else V4.

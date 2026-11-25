@@ -7,6 +7,8 @@
 //     Follows the project's Tailwind 3 or 4.
 //   - Tailwind white/black (text-white, bg-black/50)   -> diamond -> every colour at 500, plus white and black,
 //     and the opacity row
+//   - In Tailwind projects, hovering a circle names the nearest Tailwind colour ("= blue-500"), and Alt+click on one
+//     inside a class (bg-[#3b82f6]) swaps it for the class (bg-blue-500). See 4e.
 //   - Tailwind sizes (p-4, -mt-2, w-8, text-sm, rounded-lg, shadow-md) -> no mark; a plain click on the class
 //     shows a row of its sizes. Off by default: Settings -> Tools -> Hex Swatch (Settings / SettingsPage below).
 //
@@ -22,6 +24,8 @@
 
 package hexswatch;
 
+import com.intellij.codeInsight.hint.HintManager;
+import com.intellij.codeInsight.hint.HintUtil;
 import com.intellij.openapi.Disposable;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.command.WriteCommandAction;
@@ -39,6 +43,7 @@ import com.intellij.openapi.editor.event.EditorFactoryEvent;
 import com.intellij.openapi.editor.event.EditorFactoryListener;
 import com.intellij.openapi.editor.event.EditorMouseEvent;
 import com.intellij.openapi.editor.event.EditorMouseListener;
+import com.intellij.openapi.editor.event.EditorMouseMotionListener;
 import com.intellij.openapi.editor.markup.TextAttributes;
 import com.intellij.openapi.options.Configurable;
 import com.intellij.openapi.project.Project;
@@ -169,6 +174,11 @@ public class HexSwatchListener implements EditorFactoryListener {
     // [^()] skips anything with brackets inside, like rgb(var(--x)) or oklch(from var(--x) l c h).
     private static final Pattern FUNC = Pattern.compile("(?i)(?<![\\w-])(rgba?|hsla?|oklch)\\(([^()]*)\\)");
 
+    // A colour in square brackets in a Tailwind class: bg-[#3b82f6], text-[color:rgb(1_2_3)]/50. Only checked on the
+    // clicked line (4e). Groups: 1 the colour, 2 opacity (may be null).
+    private static final Pattern ARBITRARY = Pattern.compile("(?i)" + PREFIX + "\\[(?:color:)?"
+            + "(#[0-9a-f]{3,8}|(?:rgba?|hsla?|oklch)\\([^()\\s]*\\))\\](?:/(\\d{1,3}))?(?![\\w-])");
+
     // Tailwind size classes, only checked on the clicked line (4d). Groups: 1 the prefix ("px", "-mt", "rounded-t"),
     // 2 the size with its dash ("-4", "-lg"), which is the part a pick replaces. Empty for a bare "rounded"/"shadow".
     private static final String SPACE_VALUE = "(?:px|\\d+(?:\\.5)?)"; // 0, px, 0.5, 4, 96...
@@ -195,6 +205,8 @@ public class HexSwatchListener implements EditorFactoryListener {
     // The size row open now, if any, so a second click (double-click) can close it.
     private static JBPopup sizePopup;
 
+    private static final int HOVER_DELAY_MS = 400; // before a circle's tooltip shows
+    private static final int TIP_MS = 5000; // how long it stays, if the mouse doesn't move off first
     private static final int MAX_FILE_CHARS = 2_000_000; // skip huge files (minified bundles, dumps)
     private static final int SCAN_DELAY_MS = 300;
 
@@ -203,6 +215,9 @@ public class HexSwatchListener implements EditorFactoryListener {
 
     // Per-project memo of which Tailwind table it uses, read once (restart the IDE after upgrading Tailwind).
     private static final Key<Map<String, String[]>> TABLE = Key.create("hexswatch.tailwindTable");
+
+    // Per-project: is Tailwind installed or listed? Filled in with TABLE by tableFor().
+    private static final Key<Boolean> HAS_TAILWIND = Key.create("hexswatch.hasTailwind");
 
     // ---- 1. Editor opened / closed -------------------------------------------------------------
 
@@ -224,15 +239,40 @@ public class HexSwatchListener implements EditorFactoryListener {
             }
         }, disposable);
 
+        Alarm hoverAlarm = new Alarm(Alarm.ThreadToUse.SWING_THREAD, disposable); // delay before a circle's tooltip
         editor.addEditorMouseListener(new EditorMouseListener() {
             @Override
             public void mousePressed(@NotNull EditorMouseEvent e) {
+                hoverAlarm.cancelAllRequests(); // no tooltip over the picker
                 closeSizeRow(); // any press closes the size row but still reaches the editor (double-click selects)
             }
 
             @Override
             public void mouseClicked(@NotNull EditorMouseEvent e) {
                 onClick(editor, e);
+            }
+        }, disposable);
+
+        editor.addEditorMouseMotionListener(new EditorMouseMotionListener() {
+            private Inlay<?> hovered; // the mark the mouse is on, null = none
+            private boolean shown;    // its tooltip has been shown
+
+            @Override
+            public void mouseMoved(@NotNull EditorMouseEvent e) {
+                Inlay<?> inlay = e.getInlay();
+                if (inlay == hovered) return;
+                hoverAlarm.cancelAllRequests();
+                if (shown) hideTip();
+                shown = false;
+                hovered = inlay;
+                if (inlay == null || !(inlay.getRenderer() instanceof Swatch swatch) || swatch.tailwind) return;
+                RelativePoint at = new RelativePoint(e.getMouseEvent());
+                hoverAlarm.addRequest(() -> {
+                    if (editor.isDisposed() || !inlay.isValid() || !hasTailwind(editor.getProject())) return;
+                    shown = true;
+                    boolean canSwap = findSwap(editor, inlay.getOffset()) != null;
+                    showTip(nearest(editor.getProject(), swatch.color), canSwap, at);
+                }, HOVER_DELAY_MS);
             }
         }, disposable);
 
@@ -457,10 +497,16 @@ public class HexSwatchListener implements EditorFactoryListener {
                 Matcher l = Pattern.compile("\"tailwindcss\"\\s*:\\s*\"\\D*(\\d+)").matcher(listed);
                 String major = v.find() ? v.group(1) : l.find() ? l.group(1) : "4";
                 if (major.equals("3")) table = V3;
+                project.putUserData(HAS_TAILWIND, !installed.isEmpty() || listed.contains("\"tailwindcss\""));
             }
             project.putUserData(TABLE, table);
         }
         return table;
+    }
+
+    private static boolean hasTailwind(Project project) {
+        tableFor(project); // reads the files the first time
+        return Boolean.TRUE.equals(project.getUserData(HAS_TAILWIND));
     }
 
     private static String readFile(Path path) {
@@ -495,6 +541,8 @@ public class HexSwatchListener implements EditorFactoryListener {
             if (!showShades(editor, start, click)) showBlackWhite(editor, start, click);
             return;
         }
+
+        if (click.isAltDown() && swapForTailwind(editor, start)) return; // 4e
 
         // A circle: hex or a colour function. Work out how the colour is written now, so the new one matches.
         Matcher hex = HEX.matcher(text);
@@ -587,13 +635,8 @@ public class HexSwatchListener implements EditorFactoryListener {
     // oklch: like Tailwind writes it ("63.7% 0.237 25.3"). Lightness/chroma as % if the original used %.
     // A hue written in turn/rad/grad comes back in degrees. Grey has no hue, so it is written as 0.
     private static String[] oklchText(Color c, String[] old) {
-        double r = toLinear(c.getRed()), g = toLinear(c.getGreen()), b = toLinear(c.getBlue());
-        double lc = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
-        double mc = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
-        double sc = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
-        double l = 0.2104542553 * lc + 0.7936177850 * mc - 0.0040720468 * sc;
-        double oa = 1.9779984951 * lc - 2.4285922050 * mc + 0.4505937099 * sc;
-        double ob = 0.0259040371 * lc + 0.7827717662 * mc - 0.8086757660 * sc;
+        double[] lab = oklab(c);
+        double l = lab[0], oa = lab[1], ob = lab[2];
         double chroma = Math.sqrt(oa * oa + ob * ob);
         double hue = (Math.toDegrees(Math.atan2(ob, oa)) + 360) % 360;
 
@@ -602,6 +645,18 @@ public class HexSwatchListener implements EditorFactoryListener {
                 old[0].endsWith("%") ? decimals(l * 100, 1) + "%" : decimals(l, 3),
                 old[1].endsWith("%") ? decimals(chroma / 0.004, 1) + "%" : decimals(chroma, 3),
                 chroma < 0.0005 ? "0" : decimals(hue, 1) + deg};
+    }
+
+    // Color -> OKLab (lightness, green-red, blue-yellow), Björn Ottosson's matrices. Used for oklch and for "nearest".
+    private static double[] oklab(Color c) {
+        double r = toLinear(c.getRed()), g = toLinear(c.getGreen()), b = toLinear(c.getBlue());
+        double lc = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
+        double mc = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+        double sc = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+        return new double[]{
+                0.2104542553 * lc + 0.7936177850 * mc - 0.0040720468 * sc,
+                1.9779984951 * lc - 2.4285922050 * mc + 0.4505937099 * sc,
+                0.0259040371 * lc + 0.7827717662 * mc - 0.8086757660 * sc};
     }
 
     private static String decimals(double v, int places) { // (0.6370, 3) -> "0.637"
@@ -778,6 +833,107 @@ public class HexSwatchListener implements EditorFactoryListener {
     // "4" -> "16px", "0.5" -> "2px", "px" -> "1px". Tailwind's spacing unit is 0.25rem = 4px.
     private static String spacingTip(String value) {
         return value.equals("px") ? "1px" : trimZeros(String.format(Locale.ROOT, "%.1f", Float.parseFloat(value) * 4)) + "px";
+    }
+
+    // ---- 4e. Nearest Tailwind colour: the circle's tooltip, and bg-[#3b82f6] -> bg-blue-500 ------
+
+    // The Tailwind colour closest to another: its name ("blue-500", "white"), and whether it is exactly the same.
+    record Nearest(String name, boolean exact) {}
+
+    // Closest by eye: distance in Oklab. Opacity is ignored. On a tie the first in the table wins.
+    private static Nearest nearest(Project project, Color c) {
+        Map<String, Color> all = new LinkedHashMap<>();
+        all.put("white", Color.WHITE);
+        all.put("black", Color.BLACK);
+        for (Map.Entry<String, String[]> e : tableFor(project).entrySet()) {
+            for (int i = 0; i < SHADES.length; i++) {
+                all.put(e.getKey() + "-" + SHADES[i], parseHex(e.getValue()[i].substring(1)));
+            }
+        }
+        double[] want = oklab(c);
+        String best = null;
+        double bestDistance = Double.MAX_VALUE;
+        for (Map.Entry<String, Color> e : all.entrySet()) {
+            double[] lab = oklab(e.getValue());
+            double l = lab[0] - want[0], a = lab[1] - want[1], b = lab[2] - want[2];
+            double distance = l * l + a * a + b * b; // squared, enough for comparing
+            if (distance < bestDistance) {
+                best = e.getKey();
+                bestDistance = distance;
+            }
+        }
+        return new Nearest(best, (all.get(best).getRGB() & 0xFFFFFF) == (c.getRGB() & 0xFFFFFF));
+    }
+
+    private static void showTip(Nearest near, boolean canSwap, RelativePoint at) {
+        Point below = new Point(at.getPoint().x, at.getPoint().y + JBUI.scale(16));
+        String text = (near.exact() ? "= " : "≈ ") + near.name() + (canSwap ? "   Alt+click to swap" : "");
+        HintManager.getInstance().showHint(
+                HintUtil.createInformationLabel(text),
+                new RelativePoint(at.getComponent(), below),
+                HintManager.HIDE_BY_ANY_KEY | HintManager.HIDE_BY_SCROLLING | HintManager.HIDE_BY_TEXT_CHANGE
+                        | HintManager.HIDE_BY_OTHER_HINT,
+                TIP_MS);
+    }
+
+    private static void hideTip() {
+        HintManager.getInstance().hideHints(HintManager.HIDE_BY_OTHER_HINT, false, false);
+    }
+
+    // What to write instead of a bracketed colour: from/to are offsets in the file.
+    record Swap(int from, int to, String text) {}
+
+    // The swap for the colour at `start`, or null if it isn't inside a Tailwind class in a Tailwind project.
+    private static Swap findSwap(Editor editor, int start) {
+        Project project = editor.getProject();
+        Document doc = editor.getDocument();
+        if (start >= doc.getTextLength() || !hasTailwind(project)) return null;
+        int line = doc.getLineNumber(start);
+        int lineStart = doc.getLineStartOffset(line);
+        String text = doc.getImmutableCharSequence().subSequence(lineStart, doc.getLineEndOffset(line)).toString();
+        Swap s = findSwap(project, text, start - lineStart);
+        return s == null ? null : new Swap(lineStart + s.from(), lineStart + s.to(), s.text());
+    }
+
+    // Same, in one line of text. "[#3b82f6]" -> "blue-500"; a "/50" after it is kept. See-through colours become an
+    // opacity: "[#3b82f680]" -> "blue-500/50" (Tailwind 3 only knows steps of 5, so others are written "/[0.37]").
+    private static Swap findSwap(Project project, String text, int start) {
+        Matcher m = ARBITRARY.matcher(text);
+        while (m.find()) {
+            if (m.start(1) != start) continue;
+            Color c = null;
+            Matcher hex = HEX.matcher(m.group(1));
+            Matcher fn = FUNC.matcher(m.group(1));
+            if (hex.matches()) c = parseHex(hex.group(1));
+            else if (fn.matches()) c = parseFunction(fn.group(1), fn.group(2));
+            if (c == null) return null;
+
+            Nearest near = nearest(project, c);
+            int open = text.lastIndexOf('[', start); // the bracket, also before "color:"
+            if (c.getAlpha() == 255) return new Swap(open, m.end(1) + 1, near.name());
+
+            // "/[0.5]" or "/name" after a see-through colour: can't be combined.
+            if (m.group(2) == null && m.end() < text.length() && text.charAt(m.end()) == '/') return null;
+            int written = m.group(2) == null ? 100 : Math.min(100, Integer.parseInt(m.group(2)));
+            int percent = Math.round(c.getAlpha() / 2.55f * written / 100);
+            String opacity = "/" + percent;
+            if (percent == 100) opacity = "";
+            else if (tableFor(project) == V3 && percent % 5 != 0) {
+                opacity = "/[" + trimZeros(String.format(Locale.ROOT, "%.2f", percent / 100f)) + "]";
+            }
+            return new Swap(open, m.end(), near.name() + opacity);
+        }
+        return null;
+    }
+
+    // Alt+click on a circle: "hover:bg-[#3b82f6]/50" -> "hover:bg-blue-500/50". False if there is nothing to swap.
+    private static boolean swapForTailwind(Editor editor, int start) {
+        Swap swap = findSwap(editor, start);
+        if (swap == null) return false;
+        WriteCommandAction.writeCommandAction(editor.getProject())
+                .withName("Swap for Tailwind Colour")
+                .run(() -> editor.getDocument().replaceString(swap.from(), swap.to(), swap.text()));
+        return true;
     }
 
     // ---- Shared by 4b, 4c and 4d ---------------------------------------------------------------
